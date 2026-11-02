@@ -19,7 +19,7 @@
     <form class="inline" onsubmit="return false"><select id="hours"><option>1</option><option selected>24</option><option>168</option></select> <button class="btn line sm" id="reload">새로 고침</button></form></div>
     <div class="tiles" id="tiles"></div></section>
   <section class="card"><p class="kicker">LLM</p><h2>개발자별 사용</h2>
-    <div class="scroll"><table><thead><tr><th>개발자</th><th>호출</th><th>거부</th><th>보낸 양</th><th>받은 양</th><th>마지막</th></tr></thead><tbody id="users"></tbody></table></div>
+    <div class="scroll"><table><thead><tr><th>개발자</th><th>호출</th><th>거부</th><th>보낸 양</th><th>받은 양</th><th>마지막</th><th>즉시 중단</th></tr></thead><tbody id="users"></tbody></table></div>
     <h3 style="font-size:14px;margin:18px 0 6px">최근 호출</h3>
     <div class="scroll"><table><thead><tr><th>시각</th><th>개발자</th><th>IP</th><th>경로</th><th>결과</th><th>시간</th></tr></thead><tbody id="calls"></tbody></table></div></section>
   <section class="card"><p class="kicker">서버</p><h2>서비스</h2>
@@ -33,7 +33,7 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 const when = ts => ts ? new Date(ts * 1000).toLocaleString("ko-KR", {hour12: false}) : "";
 const kb = n => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : (n / 1024).toFixed(1) + " KB";
 const EV = {login: "로그인", token: "개인 키 발급", project: "신규 개발", upload: "zip 올림", request: "검사 요청", decision: "승인·반려",
-  appeal: "오탐 소명", appeal_decision: "소명 판단", role_request: "관리자 신청", role_set: "역할 변경", access: "접근제어 변경", policy_fetch: "mcp-test 정책 받음(실행)", devpolicy: "개발자 PC 정책 변경"};
+  appeal: "오탐 소명", appeal_decision: "소명 판단", role_request: "관리자 신청", role_set: "역할 변경", access: "접근제어 변경", policy_fetch: "mcp-test 정책 받음(실행)", devpolicy: "개발자 PC 정책 변경", token_revoke: "즉시 중단(실행 토큰 끊음)"};
 async function load() {
   const h = $("hours").value; $("h").textContent = h;
   const d = await fetch("/api/monitor?hours=" + h).then(r => r.json());
@@ -44,13 +44,24 @@ async function load() {
     [s.load[0].toFixed(2), "부하 (1분)"], [(memUsed * 100).toFixed(0) + "%", "메모리"], [(s.disk_used / s.disk_total * 100).toFixed(0) + "%", "디스크 (/data)"]]
     .map(([v, t]) => `<div><b>${esc(v)}</b><span>${t}</span></div>`).join("");
   $("users").innerHTML = Object.entries(d.llm.users).map(([u, x]) => `<tr><td><b>${esc(u)}</b></td><td>${x.calls}</td><td>${x.denied ? `<span class="chip no">${x.denied}</span>` : 0}</td>
-    <td>${kb(x.bytes_in)}</td><td>${kb(x.bytes_out)}</td><td class="dim nw">${when(x.last)}</td></tr>`).join("") || '<tr><td colspan="6" class="dim">없음</td></tr>';
+    <td>${kb(x.bytes_in)}</td><td>${kb(x.bytes_out)}</td><td class="dim nw">${when(x.last)}</td>
+    <td><button class="btn red sm" data-kill="${esc(u)}">끊기</button></td></tr>`).join("") || '<tr><td colspan="7" class="dim">없음</td></tr>';
   $("calls").innerHTML = d.llm.recent.map(e => `<tr><td class="dim nw">${when(e.ts)}</td><td>${esc(e.user || "(키 틀림)")}</td><td class="mono">${esc(e.ip)}</td>
     <td class="mono">${esc(e.path)}</td><td><span class="chip ${e.status < 400 ? "ok" : "no"}">${e.status}</span></td><td class="dim">${(+e.sec).toFixed(1)}s</td></tr>`).join("") || '<tr><td colspan="6" class="dim">없음</td></tr>';
   $("svc").innerHTML = d.services.map(x => `<tr><td class="mono">${esc(x.name)}</td><td><span class="chip ${x.state === "RUNNING" || (x.state === "EXITED" && x.name === "gitea-bootstrap") ? "ok" : "no"}">${esc(x.state)}</span></td><td class="dim">${esc(x.detail)}</td></tr>`).join("");
   $("ev").innerHTML = d.events.map(e => `<tr><td class="dim nw">${when(e.ts)}</td><td>${esc(e.who)}</td><td>${EV[e.kind] || esc(e.kind)}</td>
-    <td class="dim">${esc(e.repo || e.request || e.login || e.title || "")}</td></tr>`).join("") || '<tr><td colspan="4" class="dim">없음</td></tr>';
+    <td class="dim">${esc(e.repo || e.request || e.login || e.target || e.title || "")}</td></tr>`).join("") || '<tr><td colspan="4" class="dim">없음</td></tr>';
 }
+// 즉시 중단(kill switch): 그 개발자의 실행 토큰·설치 코드를 모두 끊는다 → PC 의 mcp-test 는 다음 LLM·비밀값·정책 요청부터 거부됨
+// 브라우저 확인 창 대신 두 번 누르기(첫 누름 = 확인 문구)
+$("users").onclick = async ev => {
+  const b = ev.target.closest("[data-kill]"); if (!b) return;
+  if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = "한 번 더 누르면 끊습니다"; return; }
+  b.disabled = true;
+  const r = await fetch("/api/tokens/revoke", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({login: b.dataset.kill, reason: "관리자 즉시 중단 (모니터링)"})}).then(r => r.json());
+  b.textContent = `${r.revoked ?? 0}개 끊음`; b.className = "btn line sm";
+};
 $("reload").onclick = load; $("hours").onchange = load;
 document.addEventListener("kit-me", load);
 </script>
