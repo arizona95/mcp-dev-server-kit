@@ -134,13 +134,25 @@ def revoke(name, who, reason):
     _history("revoke", name, who, reason=reason)
 
 
+def served_files():
+    """승인 저장소가 지금 내주는 휠 = 지금 '승인' 상태인 MCP 마다 검사 때 고정한 휠(lock)만 — 되돌린 MCP·옛 버전은 내주지 않는다
+    (MDM 으로 새 managed-mcp.json 을 아직 못 받은 PC 나 손으로 uvx 를 돌려도 되돌린 MCP 를 받지 못하게, P11)."""
+    files = set()
+    for e in load().values():
+        if e.get("status") == "approved":
+            files.update(x["file"] for x in e.get("lock") or [{"file": e["wheel"]}])
+    return files
+
+
 def simple_index(package=None):
-    """PEP 503 간단 인덱스 — 승인된 휠만."""
+    """PEP 503 간단 인덱스 — 지금 승인된 MCP 의 휠만(served_files)."""
+    served = served_files()
     if package is None:
-        names = sorted(p.name for p in APPROVED.iterdir() if p.is_dir()) if APPROVED.exists() else []
+        names = sorted(p.name for p in APPROVED.iterdir() if p.is_dir() and any(f.name in served for f in p.glob("*.whl"))) \
+            if APPROVED.exists() else []
         return "<!doctype html><html><body>\n" + "\n".join(f'<a href="{n}/">{n}</a>' for n in names) + "\n</body></html>\n"
     d = APPROVED / norm(package)
-    files = sorted(d.glob("*.whl")) if d.exists() else []
+    files = sorted(f for f in d.glob("*.whl") if f.name in served) if d.exists() else []
     return "<!doctype html><html><body>\n" + "\n".join(
         f'<a href="/approved/files/{d.name}/{f.name}#sha256={hashlib.sha256(f.read_bytes()).hexdigest()}">{f.name}</a>' for f in files) + "\n</body></html>\n"
 

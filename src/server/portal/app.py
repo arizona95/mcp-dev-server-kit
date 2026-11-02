@@ -682,7 +682,8 @@ def approved_index():
 def approved_package(package: str):
     """승인 안 된 패키지는 404 — 그래야 uv/pip 가 기본 인덱스(PyPI·사내 미러)로 넘어간다."""
     from fastapi.responses import HTMLResponse
-    if not (publisher.APPROVED / publisher.norm(package)).is_dir():
+    d = publisher.APPROVED / publisher.norm(package)
+    if not d.is_dir() or not any(f.name in publisher.served_files() for f in d.glob("*.whl")):
         raise HTTPException(404)
     return HTMLResponse(publisher.simple_index(package))
 
@@ -690,8 +691,8 @@ def approved_package(package: str):
 @app.get("/approved/files/{package}/{fname}")
 def approved_file(package: str, fname: str):
     p = publisher.APPROVED / publisher.norm(package) / fname
-    if "/" in fname or not fname.endswith(".whl") or not p.exists():
-        raise HTTPException(404)
+    if "/" in fname or not fname.endswith(".whl") or not p.exists() or fname not in publisher.served_files():
+        raise HTTPException(404)   # 되돌린 MCP·옛 버전의 휠은 내주지 않는다(P11)
     return FileResponse(p, filename=fname)
 
 
