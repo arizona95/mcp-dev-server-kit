@@ -54,7 +54,8 @@ def skillspector_findings(root):
         explain = i.get("explanation", "")
         if i.get("finding"):
             explain += f"\n\n걸린 내용: {i['finding'].strip()}"
-        out.append(finding("skillspector", (i.get("severity") or "").lower(), i.get("pattern") or i.get("id"), explain,
+        title = i.get("pattern") or f"{i.get('category') or '분류 없음'} ({i.get('id')})"
+        out.append(finding("skillspector", (i.get("severity") or "").lower(), title, explain,
                            loc.get("file"), loc.get("start_line"), root,
                            {"kind": "advice", "text": i["remediation"]} if i.get("remediation") else None,
                            category=i.get("category"), rule=f"skillspector:{i.get('id')}", confidence=i.get("confidence")))

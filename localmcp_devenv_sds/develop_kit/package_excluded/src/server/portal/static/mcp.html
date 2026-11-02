@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP 등록 — MCP Dev Kit</title>
+<link rel="stylesheet" href="/static/kit.css">
+<style>
+select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 13px; background: #fff; min-width: 260px }
+.v-통과 { background: var(--ok-bg); color: var(--ok) } .v-차단, .v-오류 { background: var(--no-bg); color: var(--no) }
+.v-검토 { background: #fff4e5; color: #b54708 } .v-대기 { background: var(--soft); color: var(--sub2) }
+td a { color: var(--ink2) }
+</style>
+</head>
+<body>
+<header class="top"><span class="brand">MCP Dev Kit</span><nav class="nav" id="nav" data-on="/mcp"></nav></header>
+
+<section class="hero">
+  <span class="tag">MCP 등록</span>
+  <h1>검사 → 승인 → 배포</h1>
+  <p>Git 저장소를 고르면 중앙 검사가 돌고, 관리자가 승인하면 임직원 Claude Code 에 들어갑니다</p>
+</section>
+
+<main>
+  <section class="card">
+    <p class="kicker">요청</p>
+    <h2>등록 요청</h2>
+    <form class="inline" id="new">
+      <select name="repo" id="repo" required></select>
+      <input name="ref" placeholder="브랜치" value="main" required>
+      <button class="btn">검사 요청</button>
+    </form>
+    <p class="dim">저장소 최상위에 <span class="mono">kit-mcp.json</span> (name · entry · egress) 과 <span class="mono">requirements.txt</span> 가 있어야 합니다. 새로 시작하면 <a href="/new">신규 개발</a>.</p>
+    <div class="err" id="err"></div>
+    <h3 style="margin:20px 0 6px;font-size:14px">또는 zip 으로 올리기</h3>
+    <form class="inline" id="up">
+      <select name="repo" id="up-repo" required></select>
+      <input type="file" name="file" accept=".zip" required>
+      <button class="btn">올리고 검사 요청</button>
+    </form>
+    <p class="dim">고른 저장소의 main 을 zip 내용으로 바꾸는 커밋 하나를 만들고 바로 검사합니다 (20MB 까지).</p>
+    <div class="err" id="up-err"></div>
+  </section>
+
+  <section class="card" id="role-card" hidden>
+    <p class="kicker">계정</p>
+    <h2>관리자 권한 신청</h2>
+    <p class="dim">검사 결과 승인·오탐 판단을 맡을 사람만 신청합니다. 주관리자가 허용하면 관리자 메뉴가 생깁니다.</p>
+    <form class="inline" id="role-f"><input id="role-reason" placeholder="신청 사유 (예: 보안팀 MCP 검토 담당)" style="flex:1"><button class="btn line">신청</button></form>
+    <div class="dim" id="role-msg"></div>
+  </section>
+
+  <section class="card">
+    <div class="row"><div><p class="kicker">목록</p><h2>요청</h2></div><button class="btn line sm" id="reload">새로 고침</button></div>
+    <div class="scroll"><table>
+      <thead><tr><th>시각</th><th>MCP</th><th>저장소</th><th>요청자</th><th>검사</th><th>걸린 항목</th><th>결정</th></tr></thead>
+      <tbody id="list"></tbody>
+    </table></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const when = ts => new Date(ts * 1000).toLocaleString("ko-KR", {hour12: false});
+const DEC = {pending: "대기", approved: "승인", rejected: "반려"};
+async function api(path, opt) {
+  const r = await fetch(path, opt); const b = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(b.detail || r.statusText); return b;
+}
+function verdict(r) {
+  const v = r.status === "done" ? r.verdict : (r.status === "running" ? "검사 중" : "대기");
+  return `<span class="chip v-${r.status === "done" ? v : "대기"}">${esc(v)}</span>`;
+}
+async function load() {
+  const rows = await api("/api/requests");
+  $("list").innerHTML = rows.map(r => `<tr>
+    <td class="nw dim">${when(r.created)}</td><td><a href="/requests/${r.id}"><b>${esc(r.name)}</b></a></td>
+    <td class="mono">${esc(r.repo)}@${esc(r.ref)}</td><td>${esc(r.submitter)}</td><td class="nw">${verdict(r)}</td>
+    <td class="nw">${r.status === "done" ? r.findings + "건" : ""} ${r.flags.map(f => `<span class="chip gray">${esc(f)}</span>`).join(" ")}</td>
+    <td class="nw">${DEC[r.decision] || ""}</td></tr>`).join("") || '<tr><td colspan="7" class="dim">없음</td></tr>';
+  if (rows.some(r => r.status !== "done")) setTimeout(load, 3000);
+}
+(async () => {
+  const repos = await api("/api/repos");
+  $("repo").innerHTML = repos.map(r => `<option value="${esc(r.full_name)}" data-branch="${esc(r.default_branch)}">${esc(r.full_name)}</option>`).join("")
+    || '<option value="">Git 에 저장소가 없습니다</option>';
+  $("repo").onchange = () => { const o = $("repo").selectedOptions[0]; if (o) document.querySelector("[name=ref]").value = o.dataset.branch; };
+  $("repo").onchange();
+  $("up-repo").innerHTML = $("repo").innerHTML;
+  load();
+})();
+$("new").onsubmit = async ev => {
+  ev.preventDefault(); $("err").textContent = "";
+  const f = new FormData(ev.target);
+  try { const r = await api("/api/requests", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({repo: f.get("repo"), ref: f.get("ref")})}); location.href = "/requests/" + r.id; }
+  catch (e) { $("err").textContent = e.message; }
+};
+$("up").onsubmit = async ev => {
+  ev.preventDefault(); $("up-err").textContent = "";
+  const b = ev.target.querySelector("button"); b.disabled = true;
+  try {
+    const r = await fetch("/api/upload", {method: "POST", body: new FormData(ev.target)}); const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    location.href = "/requests/" + j.request.id;
+  } catch (e) { $("up-err").textContent = e.message; } finally { b.disabled = false; }
+};
+$("reload").onclick = load;
+document.addEventListener("kit-me", e => { const me = e.detail; if (!me || me.is_admin) return;
+  $("role-card").hidden = false;
+  if (me.admin_request) $("role-msg").textContent = "신청함 — 주관리자 허용을 기다리는 중";
+});
+$("role-f").onsubmit = async ev => { ev.preventDefault();
+  try { await api("/api/roles/request", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({reason: $("role-reason").value})});
+    $("role-msg").textContent = "신청함 — 주관리자 허용을 기다리는 중"; } catch (e) { $("role-msg").textContent = e.message; } };
+</script>
+<script src="/static/nav.js"></script>
+</body>
+</html>

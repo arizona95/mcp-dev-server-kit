@@ -38,6 +38,8 @@ const gooseDirs = WIN
   ? [join(process.env.APPDATA, "Block", "goose"), join(process.env.LOCALAPPDATA, "Block", "goose")]
   : [".config/goose", ".local/share/goose", ".local/state/goose", ".cache/goose"].map(d => join(HOME, d));
 for (const d of gooseDirs) mkdirSync(d, {recursive: true});
+// srt 는 샌드박스 안 TMPDIR 을 /tmp/claude 로 두고 그 폴더를 묶어 넣는다 — 없으면 goose 가 임시 파일을 못 만든다
+if (!WIN) mkdirSync("/tmp/claude", {recursive: true});
 
 say(`정책 v${policy.version} · 샌드박스 ${policy.sandbox === "required" ? (policy.linux_container_mode && !WIN ? "srt(컨테이너 약한 모드)" : "srt") : "끔"} · 바깥 허용 ${policy.network_allowed.join(", ")} · 작업 폴더 ${work} · 툴 호출 ${env.GOOSE_MODE}`);
 

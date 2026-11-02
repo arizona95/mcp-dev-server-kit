@@ -626,6 +626,7 @@ def template_files(name, description):
     return {
         "kit-mcp.json": json.dumps({"name": name, "description": description, "entry": entry, "egress": []}, ensure_ascii=False, indent=2) + "\n",
         "requirements.txt": TEMPLATE_DEPS,
+        ".gitignore": ".venv/\n__pycache__/\n*.egg-info/\nbuild/\ndist/\n",
         "pyproject.toml": f'''[project]
 name = "{entry}"
 version = "0.1.0"
@@ -735,7 +736,8 @@ def safe_extract(zpath, dest):
         z.extractall(dest)
     tops = [p for p in Path(dest).iterdir() if p.name not in ("__MACOSX",)]
     root = tops[0] if len(tops) == 1 and tops[0].is_dir() else Path(dest)   # 폴더째 압축한 경우
-    for junk in list(root.rglob("__pycache__")) + list(root.rglob(".git")) + list(Path(dest).glob("__MACOSX")):
+    for junk in (list(root.rglob("__pycache__")) + list(root.rglob(".git")) + list(root.glob(".venv")) + list(root.glob("venv"))
+                 + list(root.rglob("*.egg-info")) + list(Path(dest).glob("__MACOSX"))):
         shutil.rmtree(junk, ignore_errors=True)
     return root
 

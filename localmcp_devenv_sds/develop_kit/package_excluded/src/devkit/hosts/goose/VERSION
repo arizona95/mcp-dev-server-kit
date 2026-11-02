@@ -1,0 +1,4 @@
+# 이미지 빌드 때 받는 goose. 바꿀 때는 Dockerfile 의 ADD --checksum 도 같이.
+version=1.54.0
+linux-x64=goose-x86_64-unknown-linux-gnu.tar.gz sha256:ab396c95aebbd28b4d38c175234be8d4a3ea0c96e7ccb24c307e4618c9be57e1
+windows-x64=goose-x86_64-pc-windows-msvc.zip sha256:5c39bc91c3eadc231847e21a8a469e778431084437b233a63a950fee22db6239

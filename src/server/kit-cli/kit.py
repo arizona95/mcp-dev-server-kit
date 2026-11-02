@@ -17,7 +17,8 @@ SERVER = Path("/opt/kit/server")
 DATA = Path(os.environ.get("KIT_DATA", "/data"))
 
 INIT = """# mcp-dev-server-kit 설정 — 값을 채운 뒤 docker run --env-file gate.env 로 넘긴다
-# 서버 주소 (개발자 PC 가 접속하는 주소, https 권장)
+# 서버 주소 — 개발자 PC 가 접속하는 주소. 반드시 도메인 이름(IP 안 됨)과 https.
+#   개발자 PC 샌드박스(srt)는 IP·사설망 주소로 가는 연결을 프록시 밖으로 보내 막아 버린다.
 KIT_PUBLIC_URL=https://mcp.example.corp
 
 # 첫 관리자 계정(kitadmin) 비밀번호 — Gitea·포털 공용

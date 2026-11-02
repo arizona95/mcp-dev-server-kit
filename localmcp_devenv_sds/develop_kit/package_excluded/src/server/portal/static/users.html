@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>계정·접근 — MCP Dev Kit</title>
+<link rel="stylesheet" href="/static/kit.css">
+<style>.btn.red { background: var(--no) } select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 13px }</style>
+</head>
+<body>
+<header class="top"><span class="brand">MCP Dev Kit</span><nav class="nav" id="nav" data-on="/admin/users"></nav></header>
+<section class="hero"><span class="tag">주관리자</span><h1>계정 · 접근제어</h1><p>관리자 허용 · 들어올 수 있는 IP</p></section>
+<main>
+  <section class="card">
+    <p class="kicker">계정</p><h2>역할</h2>
+    <p class="dim">주관리자 = Git 사이트 관리자 · 관리자 = 개발자 계정이 신청하고 주관리자가 허용 · 개발자 = 가입한 모든 계정</p>
+    <div class="scroll"><table><thead><tr><th>계정</th><th>역할</th><th>관리자 신청</th><th></th></tr></thead><tbody id="users"></tbody></table></div>
+    <div class="err" id="u-err"></div>
+  </section>
+  <section class="card">
+    <p class="kicker">접근제어</p><h2>들어올 수 있는 IP</h2>
+    <p class="dim">포털 · Git · LLM 전체에 적용 (nginx). 지금 접속 IP: <b class="mono" id="myip"></b> · MAC 주소는 서버가 볼 수 없어 사내 스위치·NAC 에서 막아야 합니다.</p>
+    <form class="inline" onsubmit="return false">
+      <select id="mode"><option value="all">모두 허용</option><option value="list">목록의 IP 만 허용</option></select>
+    </form>
+    <div class="scroll"><table><thead><tr><th>IP · CIDR</th><th>메모</th><th></th></tr></thead><tbody id="acl"></tbody></table></div>
+    <form class="inline" id="add-ip"><input id="cidr" placeholder="10.0.0.0/8 또는 203.0.113.7"><input id="memo" placeholder="메모"><button class="btn line">줄 추가</button><button class="btn line" type="button" id="mine">내 IP 추가</button></form>
+    <p><button class="btn" id="save">저장</button> <span class="dim" id="saved"></span></p>
+    <div class="err" id="a-err"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const when = ts => ts ? new Date(ts * 1000).toLocaleString("ko-KR", {hour12: false}) : "";
+const LABEL = {super: "주관리자", admin: "관리자", dev: "개발자"};
+async function api(path, opt) {
+  const r = await fetch(path, opt); const b = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(b.detail || r.statusText), {status: r.status}); return b;
+}
+let ACL = {mode: "all", entries: []};
+async function users() {
+  const d = await api("/api/roles");
+  $("users").innerHTML = d.users.map(u => `<tr><td><b>${esc(u.login)}</b> <span class="dim">${esc(u.email)}</span></td>
+    <td><span class="chip ${u.role === "dev" ? "gray" : ""}">${LABEL[u.role]}</span></td>
+    <td>${u.request ? `${esc(u.request.reason)} <span class="dim">${when(u.request.at)}</span>` : ""}</td>
+    <td class="nw">${u.role === "super" ? "" : u.role === "admin" ? `<button class="btn red sm" data-r="dev" data-l="${esc(u.login)}">관리자 해제</button>`
+      : `<button class="btn sm" data-r="admin" data-l="${esc(u.login)}">관리자 허용</button>`}</td></tr>`).join("");
+}
+function paintAcl() {
+  $("mode").value = ACL.mode;
+  $("acl").innerHTML = ACL.entries.map((e, i) => `<tr><td class="mono">${esc(e.cidr)}</td><td>${esc(e.memo)}</td><td><button class="btn line sm" data-del="${i}">삭제</button></td></tr>`).join("")
+    || '<tr><td colspan="3" class="dim">없음</td></tr>';
+}
+async function acl() { ACL = await api("/api/access"); $("myip").textContent = ACL.my_ip; paintAcl(); }
+$("users").onclick = async ev => { const b = ev.target.closest("[data-r]"); if (!b) return;
+  try { await api("/api/roles", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({login: b.dataset.l, role: b.dataset.r})}); users(); }
+  catch (e) { $("u-err").textContent = e.message; } };
+$("acl").onclick = ev => { const b = ev.target.closest("[data-del]"); if (b) { ACL.entries.splice(+b.dataset.del, 1); paintAcl(); } };
+$("mode").onchange = () => { ACL.mode = $("mode").value; };
+$("add-ip").onsubmit = ev => { ev.preventDefault(); if ($("cidr").value.trim()) { ACL.entries.push({cidr: $("cidr").value.trim(), memo: $("memo").value.trim()}); $("cidr").value = $("memo").value = ""; paintAcl(); } };
+$("mine").onclick = () => { ACL.entries.push({cidr: ACL.my_ip, memo: "내 IP"}); paintAcl(); };
+async function save(confirm) {
+  $("a-err").textContent = "";
+  try { ACL = {...ACL, ...(await api("/api/access", {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({mode: ACL.mode, entries: ACL.entries, confirm})}))};
+    $("saved").textContent = "저장 · 적용됨 " + when(ACL.at); paintAcl(); }
+  catch (e) { $("a-err").innerHTML = esc(e.message) + (e.message.includes("잠깁니다") ? ' <button class="btn red sm" id="force">그래도 저장</button>' : "");
+    const f = $("force"); if (f) f.onclick = () => save(true); }
+}
+$("save").onclick = () => save(false);
+document.addEventListener("kit-me", () => { users(); acl(); });
+</script>
+<script src="/static/nav.js"></script>
+</body>
+</html>

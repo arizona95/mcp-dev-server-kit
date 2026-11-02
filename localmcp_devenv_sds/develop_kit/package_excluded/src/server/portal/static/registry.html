@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>레지스트리 — MCP Dev Kit</title>
+<link rel="stylesheet" href="/static/kit.css">
+<style>
+pre { margin: 0; padding: 14px 16px; border-radius: 10px; background: #0f1720; color: #e6edf3; font: 12px/1.6 ui-monospace, Consolas, monospace; letter-spacing: 0; white-space: pre-wrap; word-break: break-all }
+.btn.red { background: var(--no) }
+</style>
+</head>
+<body>
+<header class="top"><span class="brand">MCP Dev Kit</span><nav class="nav" id="nav" data-on="/admin/registry"></nav></header>
+
+<section class="hero">
+  <span class="tag">레지스트리</span>
+  <h1 id="title">…</h1>
+  <p>승인된 MCP 만 managed-mcp.json 에 들어갑니다</p>
+</section>
+
+<main>
+  <section class="card">
+    <p class="kicker">MCP</p>
+    <h2>승인 목록</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>이름</th><th>버전</th><th>저장소</th><th>툴</th><th>상태</th><th></th></tr></thead>
+      <tbody id="list"></tbody>
+    </table></div>
+    <form class="inline" onsubmit="return false"><input id="revoke-reason" placeholder="되돌리기 사유" style="flex:1"></form>
+    <div class="err" id="err"></div>
+  </section>
+
+  <section class="card">
+    <div class="row"><div><p class="kicker">배포</p><h2>managed-mcp.json</h2></div>
+      <p><a class="btn sm" href="/admin/registry/managed-mcp.json">파일 받기</a> <a class="btn line sm" href="/admin/registry/managed-mcp.json.sig">서명 받기</a></p></div>
+    <p class="dim">MDM 으로 임직원 PC 에 배포: 윈도우 <span class="mono">C:\Program Files\ClaudeCode\managed-mcp.json</span> · 리눅스 <span class="mono">/etc/claude-code/managed-mcp.json</span></p>
+    <pre id="managed"></pre>
+    <p class="kicker" style="margin-top:16px">Claude Code 플러그인 마켓플레이스 (사내 Git 동기화)</p>
+    <p class="dim" id="mk-state"></p><pre id="mk"></pre>
+    <p class="kicker" style="margin-top:16px">서명 (Ed25519, base64)</p><pre id="sig"></pre>
+    <p class="kicker" style="margin-top:16px">서명 공개키</p><pre id="pub"></pre>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function api(path, opt) {
+  const r = await fetch(path, opt); const b = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(b.detail || r.statusText); return b;
+}
+async function load() {
+  const d = await api("/api/registry");
+  const items = Object.entries(d.registry);
+  $("title").textContent = `승인 ${items.filter(([, e]) => e.status === "approved").length}개`;
+  $("list").innerHTML = items.map(([n, e]) => `<tr><td><b>${esc(n)}</b></td><td class="mono">${esc(e.version)}</td>
+    <td class="mono"><a href="/requests/${esc(e.request_id)}">${esc(e.repo)}@${esc(e.commit.slice(0, 10))}</a></td>
+    <td>${e.tools.map(t => `<span class="chip gray">${esc(t.name)}</span>`).join(" ")}</td>
+    <td>${e.status === "approved" ? '<span class="chip ok">승인</span>' : `<span class="chip no">되돌림</span> <span class="dim">${esc(e.revoke_reason || "")}</span>`}</td>
+    <td>${e.status === "approved" ? `<button class="btn red sm" data-revoke="${esc(n)}">되돌리기</button>` : ""}</td></tr>`).join("")
+    || '<tr><td colspan="6" class="dim">없음</td></tr>';
+  $("managed").textContent = d.managed_mcp || '{\n  "mcpServers": {}\n}';
+  $("sig").textContent = d.signature || "-";
+  $("pub").textContent = d.public_key;
+  const m = d.marketplace || {};
+  $("mk-state").textContent = m.error ? `동기화 실패 — ${m.error}` : (m.at ? `마지막 동기화 ${new Date(m.at * 1000).toLocaleString("ko-KR", {hour12: false})}${m.commit ? " · 커밋 " + m.commit : " · 바뀐 것 없음"}` : "아직 동기화 안 함");
+  $("mk").textContent = `# 임직원 PC (한 번)\nclaude plugin marketplace add ${m.url}\nclaude plugin install <이름>@${m.name}\n# 승인·되돌리기 반영\nclaude plugin marketplace update ${m.name}\n\n# 또는 관리형 설정(managed-settings.json)으로 전원에게 + 자동 업데이트\n` +
+    JSON.stringify({extraKnownMarketplaces: {[m.name]: {source: {source: "git", url: m.url}, autoUpdate: true}},
+                    strictKnownMarketplaces: [{source: "git", url: m.url}]}, null, 2);
+}
+$("list").onclick = async ev => {
+  const b = ev.target.closest("[data-revoke]"); if (!b) return;
+  const reason = $("revoke-reason").value.trim();
+  if (!reason) { $("err").textContent = "되돌리기 사유를 적어 주세요"; return; }
+  try { await api(`/api/registry/${encodeURIComponent(b.dataset.revoke)}/revoke`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({reason})}); }
+  catch (e) { $("err").textContent = e.message; }
+  load();
+};
+document.addEventListener("kit-me", load);
+</script>
+<script src="/static/nav.js"></script>
+</body>
+</html>
