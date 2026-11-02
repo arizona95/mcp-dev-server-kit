@@ -147,6 +147,24 @@ def register(app, h):
                 return out
             page += 1
 
+    def marketplace_syncs():
+        """임직원 PC(IP)마다 마켓플레이스 저장소를 마지막으로 당긴 시각 — nginx 접속 기록에서(P11 PC별 제거 확인)."""
+        import datetime
+        path = f"/git/{h.publisher.MARKET_OWNER}/{h.publisher.MARKET_REPO}.git/"
+        last = {}
+        try:
+            with open(DATA / "logs" / "nginx-access.log", errors="replace") as f:
+                for line in f:
+                    if path not in line or "git-upload-pack" not in line:
+                        continue
+                    m = re.match(r"(\S+) \S+ \S+ \[([^\]]+)\]", line)
+                    if m:
+                        t = datetime.datetime.strptime(m.group(2), "%d/%b/%Y:%H:%M:%S %z").timestamp()
+                        last[m.group(1)] = max(last.get(m.group(1), 0), t)
+        except FileNotFoundError:
+            pass
+        return last
+
     @app.get("/api/assets")
     def assets(login: str = "", _=Depends(h.admin)):
         users = {u["login"]: {"login": u["login"], "name": u.get("full_name", ""), "email": u.get("email", "")}
@@ -157,6 +175,7 @@ def register(app, h):
         by_repo_req = {}
         for r in reqs:
             by_repo_req.setdefault(r["repo"], []).append(r)
+        syncs = marketplace_syncs()
         rows = []
         for repo in all_repos():
             full = repo["full_name"]
@@ -170,7 +189,10 @@ def register(app, h):
             if reg and reg["status"] == "approved":
                 stage, why = "배포 중", f"v{reg['version']} · 승인 {reg.get('approved_by')}"
             elif reg and reg["status"] == "revoked":
-                stage, why = "회수", reg.get("revoke_reason", "")
+                after = sorted(ip for ip, t in syncs.items() if t >= reg.get("revoked_at", 0))
+                before = sorted(ip for ip, t in syncs.items() if t < reg.get("revoked_at", 0))
+                stage, why = "회수", (f"{reg.get('revoke_reason', '')} · 회수 뒤 다시 받아 지운 PC {len(after)}대"
+                                      + (f" · 아직 안 받은 PC {len(before)}대({', '.join(before[:5])})" if before else ""))
             elif last and last.get("decision") == "rejected":
                 stage, why = "탈락", f"반려 — {last.get('reason', '')}"
             elif last and last.get("status") in ("queued", "running"):
@@ -200,7 +222,8 @@ def register(app, h):
         for r in rows:
             p = people.setdefault(r["owner"], {"login": r["owner"], "name": r["owner_name"], "email": r["owner_email"], **{s: 0 for s in stages}})
             p[r["stage"]] += 1
-        return {"rows": sorted(rows, key=lambda r: (stages.index(r["stage"]), r["repo"])), "counts": {s: sum(r["stage"] == s for r in rows) for s in stages},
+        return {"marketplace_pcs": [{"ip": ip, "last": t} for ip, t in sorted(syncs.items(), key=lambda x: -x[1])],
+                "rows": sorted(rows, key=lambda r: (stages.index(r["stage"]), r["repo"])), "counts": {s: sum(r["stage"] == s for r in rows) for s in stages},
                 "people": sorted(people.values(), key=lambda p: p["login"]), "stages": stages}
 
     @app.get("/admin/assets")

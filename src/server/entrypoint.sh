@@ -33,6 +33,13 @@ if [ -f /etc/kit/tls/server.crt ] && [ -f /etc/kit/tls/server.key ]; then
 else
   echo 'listen 8080;' > /run/kit-nginx-listen.conf
 fi
+# 기기 인증서(P6) — KIT_DEVICE_CERT=required 이고 TLS 일 때만. 발급·폐기는 kit device-cert
+if [ "${KIT_DEVICE_CERT:-off}" = "required" ] && [ -f /etc/kit/tls/server.crt ]; then
+  /opt/kit/venv/bin/python /opt/kit/server/kit-cli/devcert.py init
+  printf 'set $kit_mtls_mode required;\nssl_client_certificate /data/mtls/ca.pem;\nssl_crl /data/mtls/crl.pem;\nssl_verify_client optional;\n' > /run/kit-nginx-mtls.conf
+else
+  echo 'set $kit_mtls_mode off;' > /run/kit-nginx-mtls.conf
+fi
 /opt/kit/venv/bin/python /opt/kit/server/git-host/render_config.py
 chown -R git:git /data/gitea
 mkdir -p /data/portal && chown root:kit /data/portal && chmod 2770 /data/portal

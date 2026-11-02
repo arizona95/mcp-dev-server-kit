@@ -29,10 +29,30 @@ PORTAL_ADMIN_PASSWORD=
 #   Anthropic : LLM_MODEL=anthropic/claude-haiku-4-5
 LLM_MODEL=openai/
 LLM_API_BASE=https://
-LLM_API_KEY=
+# 공급자 키는 여기 적지 않는다(디스크에 평문으로 남음) — 컨테이너를 띄운 뒤 키 저장소에 넣는다:
+#   docker exec -i mcp-dev-server-kit kit llm-key < 키파일   (그 뒤 키파일은 지운다)
 
 # 사내 PyPI 미러 (있으면). 비우면 pypi.org — 그때는 외부 접속 패널에서 pypi.org·files.pythonhosted.org 를 열어야 함
 PYPI_INDEX_URL=
+
+# 회사 로그 시스템(SIEM) — HTTP 수집 주소(Splunk HEC 형식). 비우면 보내지 않음. 수집 토큰은 `kit secret KIT_SIEM_TOKEN` 으로 키 저장소에.
+# SIEM 주소는 포털 '서버 외부 접속' 에서 열어 주세요.
+KIT_SIEM_URL=
+# 회사 SSO(OIDC) — 붙이면 회사 계정으로만 가입·로그인(이름·이메일이 회사 계정 그대로 = 게시자 신원). 적은 뒤 kit sso
+#   클라이언트 비밀은 kit secret KIT_SSO_CLIENT_SECRET 으로 키 저장소에. 리다이렉트 URI = <KIT_PUBLIC_URL>/git/user/oauth2/<KIT_SSO_NAME>/callback
+KIT_SSO_NAME=corp-sso
+KIT_SSO_DISCOVERY_URL=
+KIT_SSO_CLIENT_ID=
+# Gitea 사용자 이름을 IdP 의 어느 값에서: email(@ 앞 — 기본) · preferred_username · nickname · userid
+KIT_SSO_USERNAME=email
+# IdP 그룹 이름 — 이 그룹 사람은 주관리자(비우면 주관리자는 kitadmin 만)
+KIT_SSO_ADMIN_GROUP=
+
+# 기기 인증서(P6): required 이면 포털·Git 화면은 회사가 발급한 기기 인증서(kit device-cert issue <PC이름>)가 있는 PC 에서만 열린다
+KIT_DEVICE_CERT=off
+
+# 감사 기록 보존 기간(일)
+KIT_LOG_RETENTION_DAYS=365
 
 # 승인 팀 이름 (안내 메일에 들어감)
 KIT_APPROVER_TEAM=보안팀
@@ -142,28 +162,69 @@ def key_store():
     src = Path("/dev/shm/kit-litellm/llm_key_source").read_text().strip()
     if Path("/data/litellm/master_key").exists():
         raise RuntimeError("디스크에 예전 평문 마스터 키(/data/litellm/master_key)가 남아 있습니다")
-    if "키 저장소" not in src:
+    if not src.startswith("LLM 공급자 키: 키 저장소("):
         raise RuntimeError(src)
     return src + " · 마스터 키는 메모리(/dev/shm)에만"
 
 
-def llm_key():
-    """공급자 키를 표준 입력으로 받아 키 저장소(키트 관리자 계정의 Gitea 시크릿 KIT_LLM_API_KEY)에 넣고 LiteLLM 을 다시 띄운다."""
+def put_secret(name):
+    """표준 입력의 값을 키 저장소(키트 관리자 계정의 Gitea 시크릿 <name>)에 넣는다 — 화면·로그에 값을 찍지 않는다."""
     import base64
     import urllib.request
     key = sys.stdin.readline().strip()
     if not key:
-        sys.exit("표준 입력으로 키를 넣어 주세요 (예: docker exec -i <컨테이너> kit llm-key < 키파일)")
+        sys.exit(f"표준 입력으로 값을 넣어 주세요 (예: docker exec -i <컨테이너> kit secret {name} < 값파일)")
     user, pw = os.environ.get("KIT_ADMIN_USER", "kitadmin"), os.environ["PORTAL_ADMIN_PASSWORD"]
-    req = urllib.request.Request("http://127.0.0.1:3000/api/v1/user/actions/secrets/KIT_LLM_API_KEY", method="PUT",
+    req = urllib.request.Request(f"http://127.0.0.1:3000/api/v1/user/actions/secrets/{name}", method="PUT",
                                  data=json.dumps({"data": key}).encode(),
                                  headers={"Content-Type": "application/json", "Authorization": "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()})
     with urllib.request.urlopen(req, timeout=15) as r:
-        print("키 저장소에 넣었습니다:", r.status)
+        print(f"키 저장소에 넣었습니다 ({name}):", r.status)
+
+
+def llm_key():
+    """공급자 키를 키 저장소(KIT_LLM_API_KEY)에 넣고 LiteLLM 을 다시 띄운다."""
+    put_secret("KIT_LLM_API_KEY")
     subprocess.run(["supervisorctl", "-c", str(SERVER / "supervisord.conf"), "restart", "litellm"], check=False)
     time.sleep(3)
     print(Path("/dev/shm/kit-litellm/llm_key_source").read_text().strip())
     print("이제 gate.env 의 LLM_API_KEY 줄을 지우고 컨테이너를 다시 만드세요.")
+
+
+def sso():
+    """회사 SSO(OIDC)를 Gitea 로그인에 붙인다 — gate.env 의 KIT_SSO_* + 키 저장소의 KIT_SSO_CLIENT_SECRET. 다시 실행하면 값을 고쳐 쓴다."""
+    sys.path.insert(0, str(SERVER / "kit-secrets"))
+    import agent
+    disc, cid = os.environ.get("KIT_SSO_DISCOVERY_URL", ""), os.environ.get("KIT_SSO_CLIENT_ID", "")
+    if not disc or not cid:
+        sys.exit("gate.env 에 KIT_SSO_DISCOVERY_URL · KIT_SSO_CLIENT_ID 를 적어 주세요")
+    sec = agent.request({"cmd": "kit", "names": ["KIT_SSO_CLIENT_SECRET"]}).get("values", {}).get("KIT_SSO_CLIENT_SECRET")
+    if not sec:
+        sys.exit("클라이언트 비밀을 먼저 키 저장소에: docker exec -i <컨테이너> kit secret KIT_SSO_CLIENT_SECRET < 파일")
+    name = os.environ.get("KIT_SSO_NAME", "corp-sso")
+    # IdP 는 키트 밖 — 외부 접속 허용목록에 넣는다(바깥은 Squid 로만 나간다). 이유·이력이 패널에 남는다.
+    import urllib.parse
+    sys.path.insert(0, str(SERVER / "egress-proxy"))
+    import egress as eg
+    u = urllib.parse.urlparse(disc)
+    rule = {"host": u.hostname.lower(), "port": u.port or (443 if u.scheme == "https" else 80), "reason": "회사 SSO(IdP) — kit sso"}
+    if not any(x["host"] == rule["host"] and x["port"] == rule["port"] for x in eg.all_rules()):
+        eg.validate(rule)
+        Path(eg.EXTRA).write_text(json.dumps(eg.load_extra() + [rule], ensure_ascii=False, indent=1))
+        eg.apply()
+        eg.log_change("add", rule, "kit sso")
+        print(f"외부 접속 허용: {rule['host']}:{rule['port']} (회사 SSO)")
+    gitea = ["runuser", "-u", "git", "--", "env", "HTTPS_PROXY=http://127.0.0.1:3128", "HTTP_PROXY=http://127.0.0.1:3128",
+             "NO_PROXY=127.0.0.1,localhost", "/opt/kit/bin/gitea", "--work-path", "/data/gitea", "--config", "/data/gitea/custom/conf/app.ini", "admin", "auth"]
+    listing = subprocess.run(gitea + ["list"], capture_output=True, text=True).stdout
+    row = next((l.split() for l in listing.splitlines()[1:] if len(l.split()) > 1 and l.split()[1] == name), None)
+    opts = ["--name", name, "--provider", "openidConnect", "--key", cid, "--secret", sec, "--auto-discover-url", disc,
+            "--scopes", "openid", "--scopes", "email", "--scopes", "profile", "--skip-local-2fa"]
+    if os.environ.get("KIT_SSO_ADMIN_GROUP"):   # IdP 의 이 그룹 = 주관리자(Gitea 관리자)
+        opts += ["--group-claim-name", os.environ.get("KIT_SSO_GROUP_CLAIM", "groups"), "--admin-group", os.environ["KIT_SSO_ADMIN_GROUP"]]
+    cmd = gitea + (["update-oauth", "--id", row[0]] if row else ["add-oauth"]) + opts
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    print(("SSO 를 고쳤습니다: " if row else "SSO 를 붙였습니다: ") + name if p.returncode == 0 else "실패: " + (p.stderr or p.stdout)[-400:].replace(sec, "***"))
 
 
 def verify():
@@ -179,8 +240,14 @@ def main():
         print(INIT, end="")
     elif cmd == "verify":
         sys.exit(verify())
+    elif cmd == "device-cert":   # 기기 인증서(P6) 발급·폐기
+        os.execv("/opt/kit/venv/bin/python", ["/opt/kit/venv/bin/python", str(SERVER / "kit-cli" / "devcert.py"), *sys.argv[2:]])
     elif cmd == "llm-key":
         llm_key()
+    elif cmd == "sso":
+        sso()
+    elif cmd == "secret" and len(sys.argv) > 2 and sys.argv[2] in ("KIT_SIEM_TOKEN", "KIT_SSO_CLIENT_SECRET"):
+        put_secret(sys.argv[2])
     elif cmd == "mail-template":
         mail_template()
     elif cmd == "access-reset":

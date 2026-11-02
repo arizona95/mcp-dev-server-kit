@@ -17,6 +17,10 @@ def secret(name, n=48):
 
 def main():
     public = os.environ["KIT_PUBLIC_URL"].rstrip("/")
+    # 회사 SSO(P5): 붙어 있으면 가입은 회사 로그인으로만, 비밀번호 로그인 창은 숨김(키트 관리자 kitadmin 은 API 용으로 남음)
+    sso = bool(os.environ.get("KIT_SSO_DISCOVERY_URL"))
+    service = ("ALLOW_ONLY_EXTERNAL_REGISTRATION = true\nENABLE_PASSWORD_SIGNIN_FORM = false\n" if sso else "")
+    oauth2_client = ("\n[oauth2_client]\nENABLE_AUTO_REGISTRATION = true\nUSERNAME = " + os.environ.get("KIT_SSO_USERNAME", "email") + "\nACCOUNT_LINKING = auto\nUPDATE_AVATAR = false\n" if sso else "")
     (DATA / "custom" / "conf").mkdir(parents=True, exist_ok=True)
     (DATA / "custom" / "conf" / "app.ini").write_text(f"""APP_NAME = MCP Dev Kit Git
 RUN_USER = git
@@ -52,7 +56,7 @@ JWT_SECRET = {secret("jwt_secret", 32)}
 DISABLE_REGISTRATION = false
 REQUIRE_SIGNIN_VIEW = true
 DEFAULT_KEEP_EMAIL_PRIVATE = true
-
+{service}{oauth2_client}
 [openid]
 ENABLE_OPENID_SIGNIN = false
 ENABLE_OPENID_SIGNUP = false

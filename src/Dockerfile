@@ -1,18 +1,26 @@
 # 개발자 PC 샌드박스 srt(@anthropic-ai/sandbox-runtime) 묶음 — 리눅스·윈도우 공용 (srt-win 포함)
-FROM node:22.12.0-bookworm-slim AS srt
+# 베이스 이미지는 다이제스트로 고정(P1·P14 — 공개된 지 2주가 지난 것만: node 22.12.0 = 2024-12, debian bookworm-20261005 = 2026-10-06)
+FROM node:22.12.0-bookworm-slim@sha256:35531c52ce27b6575d69755c73e65d4468dba93a25644eed56dc12879cae9213 AS srt
 RUN npm install --prefix /srt-bundle --omit=dev --no-audit --no-fund @anthropic-ai/sandbox-runtime@0.0.80 \
     && tar czf /srt-bundle.tgz -C / srt-bundle
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-20261005-slim@sha256:a4672c0cb26fbdde88e38fa2dfb6c681942306680e41e4378b28770b6e79ee91
 ARG KIT_VERSION=dev
+# apt 도 같은 날짜의 Debian 스냅숏으로 고정(P1·P14) — 어느 날 빌드해도 같은 패키지
+ARG APT_SNAPSHOT=20261005T000000Z
+RUN rm -f /etc/apt/sources.list.d/debian.sources \
+    && printf 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/%s bookworm main\ndeb [check-valid-until=no] http://snapshot.debian.org/archive/debian/%s bookworm-updates main\ndeb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/%s bookworm-security main\n' "$APT_SNAPSHOT" "$APT_SNAPSHOT" "$APT_SNAPSHOT" > /etc/apt/sources.list
+
 ENV KIT_VERSION=$KIT_VERSION KIT_SANDBOX_IMAGE=mcp-kit-sandbox-python:$KIT_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
       squid nftables python3 python3-venv supervisor ca-certificates git nginx \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -s /usr/sbin/nologin kit \
     && useradd -m -s /bin/sh git && usermod -aG kit git
-RUN python3 -m venv /opt/kit/venv && /opt/kit/venv/bin/pip install --no-cache-dir fastapi==0.115.6 uvicorn==0.34.0 itsdangerous==2.2.0 cryptography==43.0.3 python-multipart==0.0.20
-RUN python3 -m venv /opt/kit/litellm-venv && /opt/kit/litellm-venv/bin/pip install --no-cache-dir "litellm[proxy]==1.104.3"
+# 파이썬 패키지는 하위 의존성까지 버전·해시 고정(requirements/*.lock — uv pip compile --generate-hashes --exclude-newer <2주 전>)
+COPY server/requirements /opt/kit/requirements
+RUN python3 -m venv /opt/kit/venv && /opt/kit/venv/bin/pip install --no-cache-dir --require-hashes --no-deps -r /opt/kit/requirements/portal.lock
+RUN python3 -m venv /opt/kit/litellm-venv && /opt/kit/litellm-venv/bin/pip install --no-cache-dir --require-hashes --no-deps -r /opt/kit/requirements/litellm.lock
 ADD --checksum=sha256:ea93cfa4a300564ac457d3903469fea49ec5a4da37d0cebaa435f8e329ea64d0 \
     https://github.com/go-gitea/gitea/releases/download/v28.1.0/gitea-28.1.0-linux-amd64 /opt/kit/bin/gitea
 RUN chmod 755 /opt/kit/bin/gitea
@@ -29,8 +37,7 @@ COPY --from=srt /srt-bundle.tgz /opt/kit/devkit/hosts/srt/srt-bundle.tgz
 RUN chmod -R a+rX /opt/kit/devkit
 # SkillSpector (NVIDIA, vendor/ 원본 그대로) — Python 3.12 이상이 필요해 uv 로 따로 설치, uv.lock 그대로
 COPY vendor/skillspector /opt/kit/vendor/skillspector
-RUN /opt/kit/venv/bin/pip install --no-cache-dir uv==0.13.1 \
-    && cd /opt/kit/vendor/skillspector \
+RUN cd /opt/kit/vendor/skillspector \
     && UV_PYTHON_INSTALL_DIR=/opt/kit/python UV_PROJECT_ENVIRONMENT=/opt/kit/skillspector-venv \
        /opt/kit/venv/bin/uv sync --frozen --no-dev --no-editable --python 3.12 \
     && chmod -R a+rX /opt/kit/python /opt/kit/skillspector-venv
