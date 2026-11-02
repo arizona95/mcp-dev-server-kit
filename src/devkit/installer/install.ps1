@@ -20,6 +20,9 @@ if (-not $node) { throw 'Node 22.12 이상을 먼저 설치해 주세요 (사내
 & node -e 'const [a,b]=process.versions.node.split(''.'').map(Number); process.exit(a>22||(a==22&&b>=12)?0:1)'
 if ($LASTEXITCODE -ne 0) { throw "Node 22.12 이상이 필요합니다 (지금 $(node --version))" }
 
+# goose.exe 는 Visual C++ 런타임(MSVCP140.dll)이 있어야 뜬다 — 사내 배포본(VC++ 2015-2022 x64 재배포 패키지)
+if (-not (Test-Path (Join-Path $env:SystemRoot 'System32\msvcp140.dll'))) { throw 'Visual C++ 2015-2022 x64 런타임을 먼저 설치해 주세요 (사내 배포본 · https://aka.ms/vs/17/release/vc_redist.x64.exe)' }
+
 $Dir = Join-Path $env:LOCALAPPDATA 'mcp-dev-kit'
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
 function Get-KitFile($name, $sha) {
@@ -43,6 +46,9 @@ tar -xzf $Tgz -C $Dir
 Remove-Item $Tgz
 Get-KitFile 'mcp-test.mjs' $MjsSha256 | Out-Null
 $SrtCli = Join-Path $Dir 'srt-bundle\node_modules\@anthropic-ai\sandbox-runtime\dist\cli.js'
+# srt 는 명령을 별도 사용자(srt-sandbox)로 실행한다 — 개인 폴더(AppData)에 둔 srt·goose 를 그 사용자가 읽고 실행할 수 있게
+# (Users 읽기·실행만 · 개인 키 파일 token 은 그대로 본인만)
+foreach ($sub in 'srt-bundle', (Split-Path -Leaf $Goose.DirectoryName)) { icacls (Join-Path $Dir $sub) /grant '*S-1-5-32-545:(OI)(CI)RX' /T /Q | Out-Null }
 
 Set-Content -NoNewline -Path (Join-Path $Dir 'token') -Value $env:KIT_TOKEN
 $CaPem = @'
