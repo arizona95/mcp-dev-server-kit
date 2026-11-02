@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/src"
 NAME="mcp-dev-server-kit-v$VERSION"
 OUT="$ROOT/dist/$NAME"
-KEY="${KIT_RELEASE_KEY:-$HOME/.config/mcp-kit-release/release.key}"
+KEY="${KIT_RELEASE_KEY:-${HOME:-/root}/.config/mcp-kit-release/release.key}"
 mkdir -p "$OUT" "$SRC/images"
 COMMIT=$(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo "")
 
