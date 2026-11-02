@@ -383,6 +383,10 @@ def download_file(name: str, request: Request):
     for os_name, (file, _) in goose_files().items():
         if name == file:
             return FileResponse(DEVKIT / "hosts" / "goose" / os_name / file, filename=file)
+    if name == "bwrap-userns.apparmor":   # 리눅스 IT 사전 준비 — Ubuntu 23.10+ 에서 bubblewrap 에 userns 허용
+        return FileResponse(DEVKIT / "policies" / "linux" / name, filename=name)
+    if name == "applocker-goose.ps1":    # 윈도우 IT — goose 는 샌드박스 안에서만(AppLocker)
+        return FileResponse(DEVKIT / "policies" / "windows" / name, filename=name)
     if name == "sitecustomize.py":   # 윈도우 srt 샌드박스 안 파이썬 보정 (루프백 허용 범위 socketpair)
         return FileResponse(DEVKIT / "hosts" / "pyshim" / name, filename=name)
     if name in ("srt-bundle.tgz", "mcp-test.mjs"):

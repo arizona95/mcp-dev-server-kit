@@ -1,0 +1,12 @@
+# MCP Dev Kit — Ubuntu 23.10+ 의 기본값(kernel.apparmor_restrict_unprivileged_userns=1)에서도 srt 샌드박스(bubblewrap)가
+# user namespace 를 만들 수 있게, /usr/bin/bwrap 하나에만 userns 를 허용한다 (시스템 전체 설정은 그대로).
+# IT 사전 준비(PC 마다 한 번, 관리자):
+#   sudo install -m 644 bwrap-userns.apparmor /etc/apparmor.d/bwrap-mcp-dev-kit
+#   sudo apparmor_parser -r /etc/apparmor.d/bwrap-mcp-dev-kit
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap-mcp-dev-kit /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap-mcp-dev-kit>
+}

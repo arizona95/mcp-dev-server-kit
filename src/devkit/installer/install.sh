@@ -29,6 +29,13 @@ if [ -n "$missing" ]; then
 fi
 node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a==22&&b>=12)?0:1)' \
   || { echo "Node 22.12 이상이 필요합니다 (지금 $(node --version))" >&2; exit 2; }
+# Ubuntu 23.10+ 기본값(apparmor_restrict_unprivileged_userns=1)이면 bubblewrap 이 막혀 샌드박스를 못 연다 — IT 가 bwrap 전용 AppArmor 프로필을 넣어야
+if ! bwrap --unshare-user --unshare-net --ro-bind / / true 2>/dev/null; then
+  echo "이 PC 에서는 샌드박스(bubblewrap)가 user namespace 를 만들 수 없습니다 — IT 사전 준비가 필요합니다:" >&2
+  echo "  curl -fsSL -H \"Authorization: Bearer \$KIT_TOKEN\" -o bwrap-userns.apparmor $PUBLIC/download/files/bwrap-userns.apparmor" >&2
+  echo "  sudo install -m 644 bwrap-userns.apparmor /etc/apparmor.d/bwrap-mcp-dev-kit && sudo apparmor_parser -r /etc/apparmor.d/bwrap-mcp-dev-kit" >&2
+  exit 2
+fi
 
 get() {   # 파일 하나 받고 해시 확인
   curl -fsSL -H "Authorization: Bearer $KIT_TOKEN" -o "$DIR/$1" "$PUBLIC/download/files/$1"
