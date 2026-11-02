@@ -4,6 +4,11 @@ FROM node:22.12.0-bookworm-slim@sha256:35531c52ce27b6575d69755c73e65d4468dba93a2
 RUN npm install --prefix /srt-bundle --omit=dev --no-audit --no-fund @anthropic-ai/sandbox-runtime@0.0.80 \
     && tar czf /srt-bundle.tgz -C / srt-bundle
 
+# mcp-remote(원격 MCP 서버를 stdio 로 잇는 다리) — 의존성까지 잠금 파일 그대로(P14), 설치 스크립트 실행 안 함
+FROM node:22.12.0-bookworm-slim@sha256:35531c52ce27b6575d69755c73e65d4468dba93a25644eed56dc12879cae9213 AS mcpremote
+COPY devkit/hosts/mcp-remote/package.json devkit/hosts/mcp-remote/package-lock.json /mcp-remote/
+RUN cd /mcp-remote && npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
 FROM debian:bookworm-20261005-slim@sha256:a4672c0cb26fbdde88e38fa2dfb6c681942306680e41e4378b28770b6e79ee91
 ARG KIT_VERSION=dev
 # apt 도 같은 날짜의 Debian 스냅숏으로 고정(P1·P14) — 어느 날 빌드해도 같은 패키지
@@ -34,6 +39,7 @@ ADD --checksum=sha256:5c39bc91c3eadc231847e21a8a469e778431084437b233a63a950fee22
     https://github.com/block/goose/releases/download/v1.54.0/goose-x86_64-pc-windows-msvc.zip /opt/kit/devkit/hosts/goose/windows-x64/
 COPY devkit /opt/kit/devkit
 COPY --from=srt /srt-bundle.tgz /opt/kit/devkit/hosts/srt/srt-bundle.tgz
+COPY --from=mcpremote /mcp-remote/node_modules /opt/kit/devkit/hosts/mcp-remote/node_modules
 RUN chmod -R a+rX /opt/kit/devkit
 # SkillSpector (NVIDIA, vendor/ 원본 그대로) — Python 3.12 이상이 필요해 uv 로 따로 설치, uv.lock 그대로
 COPY vendor/skillspector /opt/kit/vendor/skillspector

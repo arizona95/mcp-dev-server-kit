@@ -36,6 +36,10 @@ def components():
             srt = json.load(m)["version"]
     except Exception:
         pass
+    mr = ""
+    pj = Path("/opt/kit/devkit/hosts/mcp-remote/node_modules/mcp-remote/package.json")
+    if pj.exists():
+        mr = json.loads(pj.read_text()).get("version", "")
     ss = ""
     pp = Path("/opt/kit/vendor/skillspector/pyproject.toml")
     if pp.exists():
@@ -46,6 +50,7 @@ def components():
         ("LiteLLM (LLM 게이트웨이)", _pkg("/opt/kit/litellm-venv", "litellm")),
         ("goose (개발자 PC 호스트)", next((l.split("=", 1)[1] for l in goose.splitlines() if l.startswith("version=")), "")),
         ("srt (sandbox-runtime)", srt),
+        ("mcp-remote (사내 Git kitadmin/mcp-remote)", mr),
         ("SkillSpector (감시자)", ss),
         ("FastAPI (포털)", _pkg("/opt/kit/venv", "fastapi")),
         ("uv", _pkg("/opt/kit/venv", "uv")),

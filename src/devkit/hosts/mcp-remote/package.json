@@ -1,0 +1,8 @@
+{
+  "name": "kit-mcp-remote",
+  "private": true,
+  "description": "사내 반입본 — mcp-remote 0.15.1 (원격 MCP 서버를 stdio 로 잇는 다리)",
+  "dependencies": {
+    "mcp-remote": "0.15.1"
+  }
+}
