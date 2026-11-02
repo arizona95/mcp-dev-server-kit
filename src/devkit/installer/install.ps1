@@ -11,6 +11,7 @@ $File = '{{GOOSE_FILE}}'
 $Sha256 = '{{GOOSE_SHA256}}'
 $SrtSha256 = '{{SRT_SHA256}}'
 $MjsSha256 = '{{MJS_SHA256}}'
+$PyShimSha256 = '{{PYSHIM_SHA256}}'
 if (-not $env:KIT_TOKEN) { throw '포털 다운로드 페이지에서 개인 키를 발급받아 $env:KIT_TOKEN 에 넣어 주세요' }
 
 # 샌드박스(srt)에 필요한 것: Node 22.12 이상 (윈도우는 그 밖에 추가 설치 없음 — 처음 한 번 관리자 준비 단계만)
@@ -45,10 +46,13 @@ if (Test-Path (Join-Path $Dir 'srt-bundle')) { Remove-Item -Recurse -Force (Join
 tar -xzf $Tgz -C $Dir
 Remove-Item $Tgz
 Get-KitFile 'mcp-test.mjs' $MjsSha256 | Out-Null
+# 샌드박스 안 파이썬 보정: srt 는 루프백도 허용 포트 범위 밖이면 막아 asyncio(socketpair)가 멈춘다 — 그 범위 안에서 쌍을 만든다
+New-Item -ItemType Directory -Force -Path (Join-Path $Dir 'pyshim') | Out-Null
+Move-Item -Force (Get-KitFile 'sitecustomize.py' $PyShimSha256) (Join-Path $Dir 'pyshim\sitecustomize.py')
 $SrtCli = Join-Path $Dir 'srt-bundle\node_modules\@anthropic-ai\sandbox-runtime\dist\cli.js'
 # srt 는 명령을 별도 사용자(srt-sandbox)로 실행한다 — 개인 폴더(AppData)에 둔 srt·goose 를 그 사용자가 읽고 실행할 수 있게
 # (Users 읽기·실행만 · 개인 키 파일 token 은 그대로 본인만)
-foreach ($sub in 'srt-bundle', (Split-Path -Leaf $Goose.DirectoryName)) { icacls (Join-Path $Dir $sub) /grant '*S-1-5-32-545:(OI)(CI)RX' /T /Q | Out-Null }
+foreach ($sub in 'srt-bundle', 'pyshim', (Split-Path -Leaf $Goose.DirectoryName)) { icacls (Join-Path $Dir $sub) /grant '*S-1-5-32-545:(OI)(CI)RX' /T /Q | Out-Null }
 
 Set-Content -NoNewline -Path (Join-Path $Dir 'token') -Value $env:KIT_TOKEN
 $CaPem = @'
@@ -80,6 +84,6 @@ if (-not ($UserPath -split ';' -contains $Dir)) {
   Write-Host "PATH 에 $Dir 를 추가했습니다. 새 터미널에서 mcp-test 를 실행하세요."
 }
 Write-Host "설치 완료: $Dir\mcp-test.cmd"
-Write-Host "처음 한 번, 관리자 PowerShell 에서 샌드박스 준비: node `"$SrtCli`" windows-install"
+Write-Host "처음 한 번, 관리자 PowerShell 에서 샌드박스 준비: node `"$SrtCli`" windows-install --proxy-port-range 60080-60143"
 & $Goose.FullName --version
 }

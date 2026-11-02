@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { lookup } from "node:dns/promises";
 
 const WIN = process.platform === "win32";
+const WIN_PORTS = [60080, 60143];
 const HOME = homedir();
 const CONF = WIN ? join(process.env.LOCALAPPDATA, "mcp-dev-kit") : join(HOME, ".config", "mcp-dev-kit");
 const kit = JSON.parse(readFileSync(join(CONF, "kit.json"), "utf8"));   // {public, goose, srt_cli}
@@ -59,6 +60,8 @@ if (policy.sandbox !== "required") {
       denyWrite: [join(CONF, "token"), join(CONF, "kit.json")],
     },
   };
+  // 윈도우: srt 프록시·루프백 허용 포트 범위 — windows-install --proxy-port-range 와 같아야 한다(폭 ≤ 64)
+  if (WIN) settings.windows = {proxyPortRange: WIN_PORTS};
   // 관리자가 켠 컨테이너 개발환경 모드 (리눅스만): 도커 안 bubblewrap 용 srt 약한 모드 — 유닉스 소켓 차단이 빠진다
   if (policy.linux_container_mode && !WIN) { settings.enableWeakerNestedSandbox = true; settings.network.allowAllUnixSockets = true; }
   const file = join(CONF, "srt-settings.json");
@@ -70,7 +73,8 @@ if (policy.sandbox !== "required") {
     .filter(k => env[k]).map(k => `set "${k}=${env[k]}"&& `).join("");
   const cmd = WIN
     // 샌드박스 사용자도 PC 공통 NO_PROXY 를 물려받는다 — 그대로 두면 사내 서버로 직접 붙다 WFP 에 막히므로 비운다
-    ? ["-c", `set "NO_PROXY="&& set "no_proxy="&& ${gooseEnv}set /p OPENAI_API_KEY=<"${join(CONF, "token")}"&& ` + [kit.goose, ...gooseArgs].map(winQuote).join(" ")]
+    // 파이썬 보정(pyshim/sitecustomize.py): 루프백 socketpair 를 허용 범위 안에서 만든다 — 없으면 asyncio MCP 가 시작하다 멈춘다
+    ? ["-c", `chcp 65001>nul&& set "NO_PROXY="&& set "no_proxy="&& set "PYTHONPATH=${join(kit.dir, "pyshim")}"&& set "KIT_LOOPBACK_RANGE=${WIN_PORTS.join("-")}"&& ${gooseEnv}set /p OPENAI_API_KEY=<"${join(CONF, "token")}"&& ` + [kit.goose, ...gooseArgs].map(winQuote).join(" ")]
     : [kit.goose, ...gooseArgs];
   spawn(process.execPath, [kit.srt_cli, "--settings", file, ...cmd], {stdio: "inherit", env})
     .on("exit", c => process.exit(c ?? 1));
