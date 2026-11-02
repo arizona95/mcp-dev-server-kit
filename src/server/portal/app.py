@@ -4,6 +4,7 @@ import re
 import os
 import secrets
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -68,18 +69,92 @@ def save_roles(r):
     tmp.replace(ROLES)
 
 
-def role_of(login, gitea_admin):
-    """주관리자 = Gitea 사이트 관리자 · 관리자 = 주관리자가 허용한 계정 · 그 밖 = 개발자. 요청마다 다시 본다."""
+def role_of(uid, gitea_admin):
+    """주관리자 = Gitea 사이트 관리자 · 관리자 = 주관리자가 허용한 계정(Gitea 사용자 번호로 — 이름을 바꾸거나 지운 뒤
+    같은 이름으로 가입한 다른 사람이 물려받지 않게) · 그 밖 = 개발자. 요청마다 다시 본다."""
     if gitea_admin:
         return "super"
-    return "admin" if login in load_roles()["admins"] else "dev"
+    return "admin" if any(g.get("uid") == uid for g in load_roles()["admins"].values()) else "dev"
+
+
+_LIVE = {}
+
+
+def live_user(login, fresh=False):
+    """Gitea 의 지금 계정(10초 캐시 · fresh 면 캐시 안 씀) — 없으면 None. 역할·활성·이메일·이름은 늘 여기서 읽는다(세션에 담긴 값을 믿지 않는다)."""
+    import time as _t
+    hit = _LIVE.get(login)
+    if hit and not fresh and _t.time() - hit[0] < 10:
+        return hit[1]
+    try:
+        lu = json.loads(gitea_admin(f"/api/v1/users/{urllib.parse.quote(login)}"))
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        lu = None
+    _LIVE[login] = (_t.time(), lu)
+    return lu
+
+
+def usable(lu, uid):
+    """그 사람이 지금도 같은 계정이고(번호가 같고) 로그인할 수 있나 — 지웠거나·이름을 남이 가져갔거나·로그인 금지면 False."""
+    return bool(lu) and uid is not None and lu.get("id") == uid and not lu.get("prohibit_login") and lu.get("active", True)
+
+
+_UID_FILLED = False
+
+
+def fill_uids():
+    """옛 기록(관리자 지정·검사 요청·배포 목록의 게시자)에 Gitea 사용자 번호를 한 번 채운다 — 이름만 있던 기록은
+    같은 이름으로 새로 가입한 사람이 물려받을 수 있었다. Gitea 가 아직 안 떴으면 다음 요청 때 다시."""
+    global _UID_FILLED
+    if _UID_FILLED:
+        return
+    try:
+        r = load_roles()
+        if any("uid" not in g for g in r["admins"].values()):
+            for name, g in list(r["admins"].items()):
+                if "uid" not in g:
+                    lu = live_user(name)
+                    if lu:
+                        g["uid"] = lu["id"]
+                    else:
+                        r["admins"].pop(name)
+            save_roles(r)
+        for f in REQUESTS.glob("*.json") if REQUESTS.exists() else []:
+            q = json.loads(f.read_text())
+            if "submitter_uid" not in q:
+                lu = live_user(q["submitter"])
+                q["submitter_uid"] = lu["id"] if lu else None
+                save_request(q)
+        reg = publisher.load()
+        changed = False
+        for e in reg.values():
+            pub = e.setdefault("publisher", {"login": e.get("repo", "").split("/", 1)[0]})
+            if "uid" not in pub:
+                lu = live_user(pub.get("login", ""))
+                pub["uid"] = lu["id"] if lu else None
+                changed = True
+        if changed:
+            publisher._write(publisher.REGISTRY, json.dumps(reg, ensure_ascii=False, indent=1))
+        _UID_FILLED = True
+    except OSError:
+        pass
 
 
 def user(request: Request):
+    fill_uids()
     u = request.session.get("user")
     if not u:
         raise LoginRequired()
-    role = role_of(u["login"], u.get("gitea_admin", u.get("is_admin")))
+    lu = live_user(u["login"])
+    if not usable(lu, u.get("uid")):   # 캐시가 옛 계정(이름을 바꾼 직후 같은 이름 새 가입 등)일 수 있어 한 번 새로 본다
+        lu = live_user(u["login"], fresh=True)
+    if not usable(lu, u.get("uid")):   # Gitea 에서 지움·로그인 금지·이름 바뀜 → 이 세션은 끝
+        request.session.clear()
+        raise LoginRequired()
+    u = {**u, "gitea_admin": bool(lu.get("is_admin")), "email": lu.get("email", ""), "full_name": lu.get("full_name", "")}
+    role = role_of(u["uid"], u["gitea_admin"])
     return {**u, "role": role, "role_label": ROLE_LABEL[role], "is_admin": role in ("super", "admin"), "is_super": role == "super",
             "ip": request.headers.get("x-real-ip") or (request.client.host if request.client else "")}
 
@@ -125,7 +200,8 @@ def callback(request: Request, code: str, state: str):
                                                        headers={"Authorization": f"Bearer {token}"}), timeout=10) as r:
         me = json.loads(r.read())
     # 게시자 신원(P18): Gitea(= SSO 를 붙이면 회사 계정)의 이름·이메일을 함께 둔다
-    request.session["user"] = {"login": me["login"], "gitea_admin": bool(me.get("is_admin")),
+    _LIVE.pop(me["login"], None)   # 이 이름의 옛 캐시(이름 바꾸기·재가입 직후)를 버린다
+    request.session["user"] = {"login": me["login"], "uid": me["id"], "gitea_admin": bool(me.get("is_admin")),
                                "email": me.get("email", ""), "full_name": me.get("full_name", "")}
     event("login", me["login"], admin=bool(me.get("is_admin")))
     return RedirectResponse(request.session.pop("next", "/"))
@@ -274,6 +350,9 @@ def token_user(request: Request, kind=("run",)):
         return None
     if kind and entry.get("kind", "run") not in kind:
         return None
+    if not usable(live_user(entry["login"]), entry.get("uid")) and not usable(live_user(entry["login"], fresh=True), entry.get("uid")):
+        # 만든 뒤 계정을 지움·막음·이름을 남이 가져감
+        return None
     return entry["login"]
 
 
@@ -300,7 +379,7 @@ def mint(login, kind, ttl, **extra):
 def issue_dlcode(u=Depends(user)):
     """설치 명령에 붙일 내려받기 코드 — 30분 동안 설치 파일만 받는다(LLM·정책·비밀값에는 못 씀). PC 에 저장되지 않는다."""
     event("dlcode", u["login"])
-    return {"code": mint(u["login"], "download", DL_TTL), "ttl": DL_TTL}
+    return {"code": mint(u["login"], "download", DL_TTL, uid=u["uid"]), "ttl": DL_TTL}
 
 
 @app.get("/cli/login")
@@ -308,7 +387,7 @@ def cli_login(port: int, state: str, u=Depends(user)):
     """mcp-test 가 여는 브라우저 로그인 — 실행 토큰을 만들어 PC 의 127.0.0.1:<port> 로 돌려준다(그 프로세스 메모리에만)."""
     if not 1024 <= port <= 65535 or not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", state):
         raise HTTPException(400, "잘못된 요청")
-    t = mint(u["login"], "run", RUN_TTL, ip=u["ip"])
+    t = mint(u["login"], "run", RUN_TTL, ip=u["ip"], uid=u["uid"])
     event("run_token", u["login"], ip=u["ip"])
     # 주소(쿼리)로 넘기면 브라우저 방문 기록에 남는다 — 자동 제출 폼(POST 본문)으로 PC 의 mcp-test 에 넘긴다
     from fastapi.responses import HTMLResponse
@@ -453,8 +532,13 @@ def save_request(req):
     tmp.replace(f)
 
 
+def own(req, u):
+    """그 요청을 낸 바로 그 사람인가 — 이름과 Gitea 사용자 번호가 둘 다 같아야(옛 이름으로 새로 가입한 사람은 아님)."""
+    return req["submitter"] == u["login"] and req.get("submitter_uid") == u["uid"]
+
+
 def visible(req, u):
-    return u["is_admin"] or req["submitter"] == u["login"]
+    return u["is_admin"] or own(req, u)
 
 
 class NewRequest(BaseModel):
@@ -471,7 +555,7 @@ def my_repos(u=Depends(user)):
 @app.post("/api/requests")
 def new_request(body: NewRequest, u=Depends(user)):
     owner = body.repo.split("/", 1)[0]
-    if owner != u["login"] and not u["is_admin"]:
+    if owner != u["login"]:   # 관리자도 남의 저장소로 대신 내지 않는다 — 게시자 신원(P18)이 저장소 주인과 어긋난다
         raise HTTPException(403, "내 저장소만 요청할 수 있습니다")
     try:
         manifest = json.loads(gitea_admin(f"/api/v1/repos/{body.repo}/raw/kit-mcp.json?ref={urllib.parse.quote(body.ref)}"))
@@ -479,13 +563,16 @@ def new_request(body: NewRequest, u=Depends(user)):
         raise HTTPException(400, f"{body.repo}@{body.ref} 최상위에 kit-mcp.json 이 없습니다")
     import time as _t
     name = manifest.get("name", body.repo.split("/")[-1])
-    owner_of = publisher.load().get(name, {}).get("repo", "").split("/", 1)[0]
-    if owner_of and owner_of != owner:   # 개발자 사이 침해 방지(P15): 남이 배포한 이름으로 올려 덮어쓰지 못한다
+    entry = publisher.load().get(name, {})
+    owner_of = entry.get("repo", "").split("/", 1)[0]
+    owner_uid = (entry.get("publisher") or {}).get("uid")
+    # 개발자 사이 침해 방지(P15): 남이 배포한 이름으로 올려 덮어쓰지 못한다 — 주인은 Gitea 사용자 번호로(옛 이름 재가입 막음)
+    if entry and owner_uid != u["uid"]:   # 주인 계정이 없어진 이름(uid None)도 막는다 — 관리자가 회수한 뒤에만 다시 쓴다
         raise HTTPException(403, f"'{name}' 은 {owner_of} 의 MCP 이름입니다. kit-mcp.json 의 name 을 바꿔 주세요")
     rid = _t.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3)
     REQUESTS.mkdir(parents=True, exist_ok=True)
     req = {"id": rid, "repo": body.repo, "ref": body.ref, "name": name,
-           "submitter": u["login"], "submitter_name": u.get("full_name", ""), "submitter_email": u.get("email", ""), "created": _t.time(), "status": "queued", "decision": "pending"}
+           "submitter": u["login"], "submitter_uid": u["uid"], "submitter_name": u.get("full_name", ""), "submitter_email": u.get("email", ""), "created": _t.time(), "status": "queued", "decision": "pending"}
     save_request(req)
     event("request", u["login"], request=rid, repo=body.repo)
     return req
@@ -520,19 +607,19 @@ class Decision(BaseModel):
 
 
 @app.post("/api/requests/{rid}/decision")
-def decide(rid: str, d: Decision, who=Depends(admin)):
+def decide(rid: str, d: Decision, u=Depends(user), who=Depends(admin)):
     import time as _t
     r = load_request(rid)
     if r["status"] != "done":
         raise HTTPException(409, "검사가 끝나지 않았습니다")
     verdict = effective_verdict(r.get("result") or {})
-    if d.action == "approve" and r["submitter"] == who:   # P5: 만든 사람과 승인하는 사람을 나눈다
+    if d.action == "approve" and (r["submitter"] == who or r.get("submitter_uid") == u["uid"]):   # P5: 만든 사람과 승인하는 사람을 나눈다
         raise HTTPException(403, "자기가 올린 MCP 는 다른 관리자가 승인해야 합니다")
     if d.action == "approve":
         if verdict in ("차단", "오류"):
             raise HTTPException(409, f"검사 결과가 '{verdict}' 이라 승인할 수 없습니다 (막는 항목의 소명이 모두 허용되면 승인할 수 있습니다)")
         try:
-            publisher.approve(r, who, identity={"login": r["submitter"], "name": r.get("submitter_name", ""),
+            publisher.approve(r, who, identity={"login": r["submitter"], "uid": r.get("submitter_uid"), "name": r.get("submitter_name", ""),
                                                 "email": r.get("submitter_email", "")})
         except ValueError as e:
             raise HTTPException(409, str(e))
@@ -670,7 +757,7 @@ def _finding(req, fid):
 @app.post("/api/requests/{rid}/findings/{fid}/appeal")
 def appeal(rid: str, fid: int, body: Appeal, u=Depends(user)):
     r = load_request(rid)
-    if r["submitter"] != u["login"]:
+    if not own(r, u):
         raise HTTPException(403, "요청한 개발자만 소명할 수 있습니다")
     if r["decision"] != "pending":
         raise HTTPException(409, "이미 결정된 요청입니다")
@@ -684,9 +771,9 @@ def appeal(rid: str, fid: int, body: Appeal, u=Depends(user)):
 
 
 @app.post("/api/requests/{rid}/findings/{fid}/appeal/decision")
-def appeal_decision(rid: str, fid: int, body: AppealDecision, who=Depends(admin)):
+def appeal_decision(rid: str, fid: int, body: AppealDecision, u=Depends(user), who=Depends(admin)):
     r = load_request(rid)
-    if r["submitter"] == who:   # P5: 자기 소명을 자기가 허용하지 못한다
+    if r["submitter"] == who or r.get("submitter_uid") == u["uid"]:   # P5: 자기 소명을 자기가 허용하지 못한다
         raise HTTPException(403, "자기 소명은 다른 관리자가 판단해야 합니다")
     f = _finding(r, fid)
     if not f.get("appeal"):
@@ -956,7 +1043,7 @@ def roles_list(_=Depends(superadmin)):
     users = json.loads(gitea_admin("/api/v1/admin/users?limit=200"))
     r = load_roles()
     return {"users": [{"login": x["login"], "email": x.get("email", ""), "created": x.get("created"),
-                       "role": role_of(x["login"], x.get("is_admin")), "request": r["requests"].get(x["login"]),
+                       "role": role_of(x["id"], x.get("is_admin")), "request": r["requests"].get(x["login"]),
                        "granted": r["admins"].get(x["login"])} for x in users]}
 
 
@@ -969,9 +1056,12 @@ class RoleSet(BaseModel):
 def roles_set(body: RoleSet, who=Depends(superadmin)):
     if body.role not in ("admin", "dev"):
         raise HTTPException(400)
+    lu = live_user(body.login)
+    if body.role == "admin" and not lu:
+        raise HTTPException(400, f"'{body.login}' 계정이 사내 Git 에 없습니다")
     r = load_roles()
     if body.role == "admin":
-        r["admins"][body.login] = {"by": who, "at": _time.time()}
+        r["admins"][body.login] = {"by": who, "at": _time.time(), "uid": lu["id"]}
     else:
         r["admins"].pop(body.login, None)
     r["requests"].pop(body.login, None)
