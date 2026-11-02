@@ -36,6 +36,8 @@ pre { margin: 0; padding: 14px 16px; border-radius: 10px; background: #0f1720; c
       <p><a class="btn sm" href="/admin/registry/managed-mcp.json">파일 받기</a> <a class="btn line sm" href="/admin/registry/managed-mcp.json.sig">서명 받기</a></p></div>
     <p class="dim">MDM 으로 임직원 PC 에 배포: 윈도우 <span class="mono">C:\Program Files\ClaudeCode\managed-mcp.json</span> · 리눅스 <span class="mono">/etc/claude-code/managed-mcp.json</span></p>
     <pre id="managed"></pre>
+    <p class="kicker" style="margin-top:16px">Claude Code 플러그인 마켓플레이스 (사내 Git 동기화)</p>
+    <p class="dim" id="mk-state"></p><pre id="mk"></pre>
     <p class="kicker" style="margin-top:16px">서명 (Ed25519, base64)</p><pre id="sig"></pre>
     <p class="kicker" style="margin-top:16px">서명 공개키</p><pre id="pub"></pre>
   </section>
@@ -60,6 +62,11 @@ async function load() {
   $("managed").textContent = d.managed_mcp || '{\n  "mcpServers": {}\n}';
   $("sig").textContent = d.signature || "-";
   $("pub").textContent = d.public_key;
+  const m = d.marketplace || {};
+  $("mk-state").textContent = m.error ? `동기화 실패 — ${m.error}` : (m.at ? `마지막 동기화 ${new Date(m.at * 1000).toLocaleString("ko-KR", {hour12: false})}${m.commit ? " · 커밋 " + m.commit : " · 바뀐 것 없음"}` : "아직 동기화 안 함");
+  $("mk").textContent = `# 임직원 PC (한 번)\nclaude plugin marketplace add ${m.url}\nclaude plugin install <이름>@${m.name}\n# 승인·되돌리기 반영\nclaude plugin marketplace update ${m.name}\n\n# 또는 관리형 설정(managed-settings.json)으로 전원에게 + 자동 업데이트\n` +
+    JSON.stringify({extraKnownMarketplaces: {[m.name]: {source: {source: "git", url: m.url}, autoUpdate: true}},
+                    strictKnownMarketplaces: [{source: "git", url: m.url}]}, null, 2);
 }
 $("list").onclick = async ev => {
   const b = ev.target.closest("[data-revoke]"); if (!b) return;

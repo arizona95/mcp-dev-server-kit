@@ -136,6 +136,10 @@ def serve():
             try:
                 if cmd == b"apply":
                     reply = {"ok": True, "rules": len(apply())}
+                elif cmd == b"services":
+                    reply = {"ok": True, "services": services()}
+                elif cmd == b"access":
+                    reply = {"ok": True, "rules": apply_access()}
                 elif cmd == b"status":
                     reply = {"ok": True, "direct_blocked": direct_blocked_count(), "blocked_seen": blocked_seen()}
                 else:
@@ -143,6 +147,49 @@ def serve():
                 c.sendall(json.dumps(reply).encode())
             except Exception as e:
                 c.sendall(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False).encode())
+
+
+def services():
+    out = subprocess.run(["supervisorctl", "-c", "/opt/kit/server/supervisord.conf", "status"], capture_output=True, text=True).stdout
+    rows = []
+    for line in out.splitlines():
+        p = line.split(None, 2)
+        if len(p) >= 2:
+            rows.append({"name": p[0], "state": p[1], "detail": p[2] if len(p) > 2 else ""})
+    return rows
+
+
+ACCESS = f"{DATA}/portal/access.json"
+ACCESS_CONF = "/run/kit-nginx-access.conf"
+
+
+def access_rules():
+    try:
+        a = json.loads(open(ACCESS).read())
+    except FileNotFoundError:
+        return {"mode": "all", "entries": []}
+    import ipaddress
+    for e in a.get("entries", []):
+        ipaddress.ip_network(e["cidr"], strict=False)   # 형식이 틀리면 적용하지 않는다
+    return a
+
+
+def render_access():
+    a = access_rules()
+    if a.get("mode") != "list":
+        return a, "# 모두 허용\n"
+    lines = ["allow 127.0.0.1;"] + [f"allow {e['cidr']};" for e in a["entries"]] + ["deny all;"]
+    return a, "\n".join(lines) + "\n"
+
+
+def apply_access():
+    a, conf = render_access()
+    with open(ACCESS_CONF, "w") as f:
+        f.write(conf)
+    if os.path.exists("/run/nginx.pid"):
+        subprocess.run(["nginx", "-c", "/run/kit-nginx.conf", "-s", "reload"], check=True)
+        time.sleep(1.5)   # reload 는 비동기 — 새 워커가 받을 때까지 기다린 뒤 '적용됨' 이라고 답한다
+    return len(a.get("entries", [])) if a.get("mode") == "list" else 0
 
 
 def request(cmd):
@@ -204,4 +251,5 @@ def live_blocked_count():
 
 
 if __name__ == "__main__":
-    {"apply": lambda: print(len(apply())), "serve": serve}[sys.argv[1]]()
+    {"apply": lambda: print(len(apply())), "serve": serve,
+     "access-render": lambda: open(ACCESS_CONF, "w").write(render_access()[1])}[sys.argv[1]]()

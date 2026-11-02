@@ -135,6 +135,8 @@ $("test").onclick = async () => {
 
 $("reload-log").onclick = loadLog;
 loadState(); loadLog();
+document.addEventListener("kit-me", e => { if (!e.detail?.is_super) { $("add").hidden = true;
+  $("add-err").textContent = "허용목록 바꾸기는 주관리자만 합니다."; document.querySelectorAll("[data-del]").forEach(b => b.hidden = true); } });
 </script>
 <script src="/static/nav.js"></script>
 </body>

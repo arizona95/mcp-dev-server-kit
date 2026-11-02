@@ -30,8 +30,24 @@ td a { color: var(--ink2) }
       <input name="ref" placeholder="브랜치" value="main" required>
       <button class="btn">검사 요청</button>
     </form>
-    <p class="dim">저장소 최상위에 <span class="mono">kit-mcp.json</span> (name · entry · egress) 과 <span class="mono">requirements.txt</span> 가 있어야 합니다.</p>
+    <p class="dim">저장소 최상위에 <span class="mono">kit-mcp.json</span> (name · entry · egress) 과 <span class="mono">requirements.txt</span> 가 있어야 합니다. 새로 시작하면 <a href="/new">신규 개발</a>.</p>
     <div class="err" id="err"></div>
+    <h3 style="margin:20px 0 6px;font-size:14px">또는 zip 으로 올리기</h3>
+    <form class="inline" id="up">
+      <select name="repo" id="up-repo" required></select>
+      <input type="file" name="file" accept=".zip" required>
+      <button class="btn">올리고 검사 요청</button>
+    </form>
+    <p class="dim">고른 저장소의 main 을 zip 내용으로 바꾸는 커밋 하나를 만들고 바로 검사합니다 (20MB 까지).</p>
+    <div class="err" id="up-err"></div>
+  </section>
+
+  <section class="card" id="role-card" hidden>
+    <p class="kicker">계정</p>
+    <h2>관리자 권한 신청</h2>
+    <p class="dim">검사 결과 승인·오탐 판단을 맡을 사람만 신청합니다. 주관리자가 허용하면 관리자 메뉴가 생깁니다.</p>
+    <form class="inline" id="role-f"><input id="role-reason" placeholder="신청 사유 (예: 보안팀 MCP 검토 담당)" style="flex:1"><button class="btn line">신청</button></form>
+    <div class="dim" id="role-msg"></div>
   </section>
 
   <section class="card">
@@ -70,6 +86,7 @@ async function load() {
     || '<option value="">Git 에 저장소가 없습니다</option>';
   $("repo").onchange = () => { const o = $("repo").selectedOptions[0]; if (o) document.querySelector("[name=ref]").value = o.dataset.branch; };
   $("repo").onchange();
+  $("up-repo").innerHTML = $("repo").innerHTML;
   load();
 })();
 $("new").onsubmit = async ev => {
@@ -79,7 +96,23 @@ $("new").onsubmit = async ev => {
       body: JSON.stringify({repo: f.get("repo"), ref: f.get("ref")})}); location.href = "/requests/" + r.id; }
   catch (e) { $("err").textContent = e.message; }
 };
+$("up").onsubmit = async ev => {
+  ev.preventDefault(); $("up-err").textContent = "";
+  const b = ev.target.querySelector("button"); b.disabled = true;
+  try {
+    const r = await fetch("/api/upload", {method: "POST", body: new FormData(ev.target)}); const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    location.href = "/requests/" + j.request.id;
+  } catch (e) { $("up-err").textContent = e.message; } finally { b.disabled = false; }
+};
 $("reload").onclick = load;
+document.addEventListener("kit-me", e => { const me = e.detail; if (!me || me.is_admin) return;
+  $("role-card").hidden = false;
+  if (me.admin_request) $("role-msg").textContent = "신청함 — 주관리자 허용을 기다리는 중";
+});
+$("role-f").onsubmit = async ev => { ev.preventDefault();
+  try { await api("/api/roles/request", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({reason: $("role-reason").value})});
+    $("role-msg").textContent = "신청함 — 주관리자 허용을 기다리는 중"; } catch (e) { $("role-msg").textContent = e.message; } };
 </script>
 <script src="/static/nav.js"></script>
 </body>

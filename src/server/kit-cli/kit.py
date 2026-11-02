@@ -3,6 +3,7 @@
   kit init            gate.env 예시를 출력 (docker run --rm mcp-dev-server-kit:<버전> init > gate.env)
   kit verify          설치 점검: 서비스 · 외부 접속 통제 · LLM tool calling · osv.dev · good 통과/bad 차단
   kit mail-template   임직원 안내 메일 문안
+  kit access-reset    접근제어를 '모두 허용'으로 되돌림 (IP 목록 실수로 잠겼을 때 — 서버에서 실행)
 """
 import json
 import os
@@ -150,6 +151,14 @@ def main():
         sys.exit(verify())
     elif cmd == "mail-template":
         mail_template()
+    elif cmd == "access-reset":
+        p = DATA / "portal" / "access.json"
+        a = json.loads(p.read_text()) if p.exists() else {"entries": []}
+        a.update(mode="all", by="kit access-reset", at=time.time())
+        p.write_text(json.dumps(a, ensure_ascii=False, indent=1))
+        sys.path.insert(0, str(SERVER / "egress-proxy"))
+        import egress
+        print("접근제어: 모두 허용으로 되돌렸습니다", egress.request("access"))
     else:
         print(__doc__)
         sys.exit(2)

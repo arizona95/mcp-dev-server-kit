@@ -31,6 +31,30 @@ def previous_approved(name):
     return entry if entry and entry.get("status") == "approved" else None
 
 
+def appeal_key(f):
+    hit = next((l["text"].strip() for l in f.get("snippet", []) if l.get("hit")), "")
+    return (f.get("check"), f.get("rule") or f.get("title"), f.get("file"), hit)
+
+
+def carry_appeals(req):
+    """같은 MCP 의 지난 요청에서 허용된 소명은 같은 항목(규칙·파일·걸린 줄)에 그대로 이어 붙인다."""
+    accepted = {}
+    for f in sorted(REQUESTS.glob("*.json")):
+        old = json.loads(f.read_text())
+        if old["id"] == req["id"] or old.get("name") != req.get("name"):
+            continue
+        for x in (old.get("result") or {}).get("findings", []):
+            if (x.get("appeal") or {}).get("status") == "accepted":
+                accepted[appeal_key(x)] = {**x["appeal"], "carried_from": old["id"]}
+    n = 0
+    for x in (req.get("result") or {}).get("findings", []):
+        a = accepted.get(appeal_key(x))
+        if a:
+            x["appeal"] = a
+            n += 1
+    return n
+
+
 def main():
     REQUESTS.mkdir(parents=True, exist_ok=True)
     print("격리 이미지:", sandbox_image.ensure(), flush=True)
@@ -45,6 +69,7 @@ def main():
                 req["result"] = gate.run(req, previous_approved(req.get("name", "")), log=lambda m: print(m, flush=True))
             except Exception:
                 req["result"] = {"verdict": "오류", "error": traceback.format_exc()[-2000:]}
+            req["result"]["appeals_carried"] = carry_appeals(req)
             req["status"] = "done"
             save(f, req)
             print(f"[{req['id']}] {req['result'].get('verdict')}", flush=True)

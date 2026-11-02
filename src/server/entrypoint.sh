@@ -21,6 +21,7 @@ chown -R kit:kit /data/litellm
 umask 077
 sed "s|__LITELLM_MASTER_KEY__|$(cat /data/litellm/master_key)|" /opt/kit/server/front/nginx.conf > /run/kit-nginx.conf
 umask 022
+/opt/kit/venv/bin/python /opt/kit/server/egress-proxy/egress.py access-render
 # 인증서가 있으면 443 TLS, 없으면 8080 평문(개발용)
 if [ -f /etc/kit/tls/server.crt ] && [ -f /etc/kit/tls/server.key ]; then
   printf 'listen 443 ssl;\nssl_certificate /etc/kit/tls/server.crt;\nssl_certificate_key /etc/kit/tls/server.key;\nssl_protocols TLSv1.2 TLSv1.3;\n' > /run/kit-nginx-listen.conf

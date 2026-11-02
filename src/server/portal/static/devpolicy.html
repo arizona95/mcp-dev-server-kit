@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>개발자 PC 정책 — MCP Dev Kit</title>
+<link rel="stylesheet" href="/static/kit.css">
+<style>select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 13px } label { display: block; margin: 10px 0 4px; font-size: 12px; color: var(--sub) }</style>
+</head>
+<body>
+<header class="top"><span class="brand">MCP Dev Kit</span><nav class="nav" id="nav" data-on="/admin/devpolicy"></nav></header>
+<section class="hero"><span class="tag">개발자 PC 정책</span><h1 id="title">…</h1><p>mcp-test 가 실행할 때마다 받아 srt 샌드박스로 적용합니다</p></section>
+<main>
+  <section class="card">
+    <p class="kicker">샌드박스</p><h2>지금 정책</h2>
+    <label>샌드박스</label><select id="sandbox"><option value="required">srt 샌드박스 필수 (작업 폴더 밖 홈 읽기·쓰기 막음)</option><option value="off">끔</option></select>
+    <label><input type="checkbox" id="cmode"> 리눅스 컨테이너 개발환경 모드 (도커·WSL 안에서 개발할 때만 — srt 약한 모드, 유닉스 소켓 차단 빠짐)</label>
+    <label>대화형 mcp-test 의 툴 호출</label><select id="m-session"><option value="approve">매번 묻기 (approve)</option><option value="smart_approve">민감한 것만 묻기</option><option value="auto">묻지 않음</option><option value="chat">툴 호출 안 함</option></select>
+    <label>mcp-test run 의 툴 호출</label><select id="m-run"><option value="auto">묻지 않음 (물을 화면이 없음)</option><option value="chat">툴 호출 안 함</option></select>
+    <label>개발자 PC 에서 바깥으로 열 곳 (사내 서버 <b class="mono" id="kit"></b> 는 늘 열림)</label>
+    <div class="scroll"><table><thead><tr><th>도메인</th><th></th></tr></thead><tbody id="doms"></tbody></table></div>
+    <form class="inline" id="add"><input id="dom" placeholder="pypi.org 또는 *.example.com"><button class="btn line">줄 추가</button></form>
+    <p><button class="btn" id="save">저장</button> <span class="dim" id="saved"></span></p>
+    <div class="err" id="err"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const when = ts => ts ? new Date(ts * 1000).toLocaleString("ko-KR", {hour12: false}) : "";
+let P;
+async function api(path, opt) { const r = await fetch(path, opt); const b = await r.json().catch(() => ({})); if (!r.ok) throw new Error(b.detail || r.statusText); return b; }
+function paint() {
+  $("title").textContent = `v${P.version} · 샌드박스 ${P.sandbox === "required" ? "필수" : "끔"}`;
+  $("sandbox").value = P.sandbox; $("m-session").value = P.goose_mode.session; $("m-run").value = P.goose_mode.run; $("cmode").checked = !!P.linux_container_mode; $("kit").textContent = P.kit_host;
+  $("doms").innerHTML = P.allowed_domains.map((d, i) => `<tr><td class="mono">${esc(d)}</td><td><button class="btn line sm" data-del="${i}">삭제</button></td></tr>`).join("") || '<tr><td colspan="2" class="dim">없음 — 사내 서버만 열림</td></tr>';
+  $("saved").textContent = P.by ? `마지막 변경 ${esc(P.by)} · ${when(P.at)}` : "";
+}
+$("doms").onclick = ev => { const b = ev.target.closest("[data-del]"); if (b) { P.allowed_domains.splice(+b.dataset.del, 1); paint(); } };
+$("add").onsubmit = ev => { ev.preventDefault(); const d = $("dom").value.trim(); if (d) { P.allowed_domains.push(d); $("dom").value = ""; paint(); } };
+$("save").onclick = async () => { $("err").textContent = "";
+  try { P = await api("/api/devpolicy", {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({sandbox: $("sandbox").value,
+    allowed_domains: P.allowed_domains, goose_mode_session: $("m-session").value, goose_mode_run: $("m-run").value, linux_container_mode: $("cmode").checked, expected_version: P.version})}); paint(); }
+  catch (e) { $("err").textContent = e.message; } };
+document.addEventListener("kit-me", async e => { P = await api("/api/devpolicy"); paint();
+  if (!e.detail?.is_super) { for (const id of ["sandbox", "m-session", "m-run", "dom", "cmode"]) $(id).disabled = true; $("save").hidden = true; $("add").hidden = true;
+    $("err").textContent = "정책 바꾸기는 주관리자만 합니다."; } });
+</script>
+<script src="/static/nav.js"></script>
+</body>
+</html>

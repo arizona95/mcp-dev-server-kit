@@ -1,10 +1,9 @@
 """중앙 검사(게이트) — 등록 요청 하나를 받아 검사 결과를 만든다.
 
-검사 순서: 저장소 가져오기 → kit-mcp.json → 정적 위협 패턴(ClawVet·SkillSpector 원본) → osv.dev 의존성
-→ 격리 실행(설치 + tools/list, 실행 중 바깥 접속 시도 기록) → 의미론 LLM 검사(SkillSpector SSD 프롬프트 원본)
-→ 지난 승인본과 툴·egress 비교.
+검사 순서: 저장소 가져오기 → kit-mcp.json → SkillSpector(NVIDIA 원본 그대로: 정적·YARA·MCP·행위·LLM 의미론·OSV)
+→ osv.dev 의존성(고칠 버전 diff) → 격리 실행(설치 + tools/list, 실행 중 바깥 접속 시도 기록) → 지난 승인본과 툴·egress 비교.
 
-결과의 각 항목 = 왜 걸렸는지(설명) · 코드(파일·줄·주변) · 패치 제안(diff 또는 원본 규칙의 수정 안내).
+결과의 각 항목 = 왜 걸렸는지(설명) · 코드(파일·줄·주변) · 패치 제안(diff 또는 SkillSpector 의 remediation).
 """
 import json
 import os
@@ -17,8 +16,7 @@ import urllib.request
 from pathlib import Path
 
 import osv
-from rules import semantic_scan, threat_scan
-from rules.skillspector_pattern_defaults import DEFAULT_EXPLANATIONS, DEFAULT_REMEDIATIONS, PATTERN_NAMES
+import skillspector_run
 
 DATA = Path(os.environ.get("KIT_DATA", "/data"))
 GITEA = "http://127.0.0.1:3000"
@@ -45,32 +43,22 @@ def finding(check, severity, title, explain, rel=None, line=None, root=None, pat
             "patch": patch or {"kind": "none"}, **extra}
 
 
-# ── 1. 정적 위협 패턴 ──────────────────────────────────────────────────
+# ── 1. SkillSpector (원본 그대로) ───────────────────────────────────────
 
-def skillspector_rule(name):
-    """SkillSpector 패턴 이름 → upstream 규칙 id (예: TP3_MALICIOUS_URL → TP3). 표시용 연결(배선)."""
-    if name in DEFAULT_EXPLANATIONS:
-        return name
-    head = name.split("_", 1)[0]
-    return head if head in DEFAULT_EXPLANATIONS else None
-
-
-def static_findings(root):
+def skillspector_findings(root):
+    """SkillSpector issues 를 화면 항목으로 옮긴다. 판단·설명·수정 안내는 SkillSpector 것 그대로."""
+    report = skillspector_run.scan(root)
     out = []
-    for f in threat_scan._scan(str(root))["findings"]:
-        rel, _, ln = f["location"].rpartition(":")
-        line = int(ln) if ln.isdigit() else None
-        if f["source"] == "clawvet":
-            explain, fix, rule = f["title"], f["fix"], f["pattern"]
-        else:
-            rule = skillspector_rule(f["pattern"])
-            explain = DEFAULT_EXPLANATIONS.get(rule, "") if rule else ""
-            fix = DEFAULT_REMEDIATIONS.get(rule, "") if rule else ""
-        title = PATTERN_NAMES.get(rule, f["title"]) if f["source"] == "skillspector" and rule else f["title"]
-        out.append(finding("static", f["severity"], title, explain, rel, line, root,
-                           {"kind": "advice", "text": fix} if fix else None,
-                           category=f["category"], rule=f"{f['source']}:{f['pattern']}", cwe=f["cwe"], match=f["match"]))
-    return out
+    for i in report.get("issues", []):
+        loc = i.get("location") or {}
+        explain = i.get("explanation", "")
+        if i.get("finding"):
+            explain += f"\n\n걸린 내용: {i['finding'].strip()}"
+        out.append(finding("skillspector", (i.get("severity") or "").lower(), i.get("pattern") or i.get("id"), explain,
+                           loc.get("file"), loc.get("start_line"), root,
+                           {"kind": "advice", "text": i["remediation"]} if i.get("remediation") else None,
+                           category=i.get("category"), rule=f"skillspector:{i.get('id')}", confidence=i.get("confidence")))
+    return out, report
 
 
 # ── 2. 의존성 (osv.dev) ────────────────────────────────────────────────
@@ -208,51 +196,6 @@ def runtime_findings(root, manifest, run):
     return out
 
 
-# ── 4. 의미론 LLM 검사 ────────────────────────────────────────────────
-
-class LiteLLM:
-    def __init__(self):
-        self.key = (DATA / "litellm" / "master_key").read_text().strip()
-
-    def complete(self, prompt):
-        body = {"model": "kit-llm", "messages": [{"role": "user", "content": prompt}], "temperature": 0}
-        req = urllib.request.Request("http://127.0.0.1:4000/v1/chat/completions", data=json.dumps(body).encode(),
-                                     headers={"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=180) as r:
-            return json.loads(r.read())["choices"][0]["message"]["content"]
-
-
-def semantic_findings(root, tools):
-    """README 등 문서와 툴 설명(tools/list 그대로)을 SkillSpector 의미론 검사에 넣는다."""
-    with tempfile.TemporaryDirectory() as d:
-        d = Path(d)
-        for p in root.rglob("*"):
-            if p.is_file() and p.suffix.lower() in (".md", ".txt") and p.name != "requirements.txt":
-                (d / p.relative_to(root)).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy(p, d / p.relative_to(root))
-        lines = []
-        for t in tools:
-            lines.append(f"## tool: {t.get('name')}")
-            lines += (t.get("description") or "").splitlines()
-            for k, v in (t.get("inputSchema", {}).get("properties") or {}).items():
-                if v.get("description"):
-                    lines.append(f"- param {k}: {v['description']}")
-        (d / "tools-list.md").write_text("\n".join(lines))
-        r = semantic_scan._semantic(str(d), llm=LiteLLM())
-    out = []
-    for f in r["findings"]:
-        rel, _, ln = f["location"].rpartition(":")
-        line = int(ln) if ln.isdigit() else None
-        if rel == "tools-list.md":
-            # 툴 설명은 코드 안 docstring 에서 온다 → 그 문장이 있는 실제 파일로 잇는다
-            text = ("\n".join(lines).splitlines()[line - 1] if line and line <= len(lines) else "").strip()
-            src_rel, src_line = grep_line(root, text) if text and not text.startswith("## tool") else (None, None)
-            rel, line = (src_rel, src_line) if src_rel else (None, None)
-        out.append(finding("semantic", f["severity"], f"{f['title']} (의미론)", f.get("description", ""), rel, line, root,
-                           category="semantic_security", rule=f"skillspector:{f['pattern']}", cwe=f["cwe"]))
-    return out, r.get("errors", [])
-
-
 # ── 5. 지난 승인본과 비교 ─────────────────────────────────────────────
 
 def tool_review(tools, manifest, previous):
@@ -315,7 +258,10 @@ def run(req, previous=None, log=print):
         manifest = json.loads(mf.read_text())
         result["manifest"] = manifest
         findings = []
-        findings += step("정적 위협 패턴", lambda: static_findings(root))
+        ss, ss_report = step("SkillSpector", lambda: skillspector_findings(root))
+        findings += ss
+        result["skillspector"] = {"risk": ss_report.get("risk_assessment"), "metadata": ss_report.get("metadata"),
+                                  "warnings": ss_report.get("_warnings", [])}
         dep, _ = step("의존성 취약점 (osv.dev)", lambda: dependency_findings(root))
         findings += dep
         artifacts = DATA / "gate" / "artifacts" / req["id"]
@@ -324,9 +270,6 @@ def run(req, previous=None, log=print):
         result["sandbox"] = {k: sandbox.get(k) for k in ("ok", "error", "server", "egress_install", "egress_runtime")}
         findings += runtime_findings(root, manifest, sandbox)
         tools = sandbox.get("tools", [])
-        sem, sem_err = step("의미론 검사 (LLM)", lambda: semantic_findings(root, tools))
-        findings += sem
-        result["semantic_errors"] = sem_err
         result["review"] = tool_review(tools, manifest, previous)
         result["tools"] = tools
         order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
