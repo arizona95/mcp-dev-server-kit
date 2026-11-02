@@ -55,6 +55,8 @@ if [ -n "$CA_PEM" ]; then
   printf '%s\n' "$CA_PEM" > "$CONF/kit-ca.pem"
   { cat /etc/ssl/certs/ca-certificates.crt 2>/dev/null || cat /etc/pki/tls/certs/ca-bundle.crt 2>/dev/null || true; printf '%s\n' "$CA_PEM"; } > "$CONF/ca-bundle.pem"
   CA_BUNDLE="$CONF/ca-bundle.pem"
+  # git 도 키트 주소에서는 사내 CA 를 쓴다 (시스템 저장소에 CA 가 없는 PC 대비)
+  command -v git >/dev/null 2>&1 && git config --global "http.$PUBLIC/.sslCAInfo" "$CONF/kit-ca.pem"
 fi
 cat > "$CONF/kit.json" <<JSON
 {"public": "$PUBLIC", "dir": "$DIR", "goose": "$DIR/goose",

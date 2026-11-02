@@ -1,7 +1,11 @@
 # MCP Dev Kit 설치 (윈도우) — 포털 다운로드 페이지가 서버 주소·해시를 채워서 내려준다.
 # 사용: $env:KIT_TOKEN='<개인 키>'; irm {{PUBLIC}}/download/install.ps1 | iex
 # 설치되는 것: goose · srt 샌드박스(sandbox-runtime) · mcp-test (실행할 때마다 서버 정책을 받아 srt 안에서 goose 실행)
+# irm | iex 는 사용자 터미널 범위에서 돈다 — 설정이 그 터미널에 남지 않게 블록 안에서 실행
+& {
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 은 진행 막대를 그리느라 내려받기가 수십 배 느려진다
+$ProgressPreference = 'SilentlyContinue'
 $Public = '{{PUBLIC}}'
 $File = '{{GOOSE_FILE}}'
 $Sha256 = '{{GOOSE_SHA256}}'
@@ -25,14 +29,14 @@ function Get-KitFile($name, $sha) {
   return $out
 }
 
-Write-Host 'goose 받는 중…'
+Write-Host 'goose 받는 중...'
 $Zip = Get-KitFile $File $Sha256
 Expand-Archive -Force -Path $Zip -DestinationPath $Dir
 Remove-Item $Zip
 $Goose = Get-ChildItem -Path $Dir -Recurse -Filter goose.exe | Select-Object -First 1
 if (-not $Goose) { throw 'goose.exe 를 찾지 못했습니다' }
 
-Write-Host '샌드박스(srt) 받는 중…'
+Write-Host '샌드박스(srt) 받는 중...'
 $Tgz = Get-KitFile 'srt-bundle.tgz' $SrtSha256
 if (Test-Path (Join-Path $Dir 'srt-bundle')) { Remove-Item -Recurse -Force (Join-Path $Dir 'srt-bundle') }
 tar -xzf $Tgz -C $Dir
@@ -51,6 +55,8 @@ if ($CaPem.Trim()) {
   Set-Content -Path $CaFile -Value $CaPem
   Import-Certificate -FilePath $CaFile -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
 }
+# Git for Windows(OpenSSL)는 윈도우 신뢰 저장소를 보지 않는다 — 키트 주소에서만 사내 CA 를 쓰게 한다
+if ($CaFile -and (Get-Command git -ErrorAction SilentlyContinue)) { git config --global "http.$Public/.sslCAInfo" $CaFile }
 @{ public = $Public; dir = $Dir; goose = $Goose.FullName; srt_cli = $SrtCli; ca_bundle = '' } |
   ConvertTo-Json | Set-Content -Path (Join-Path $Dir 'kit.json')
 
@@ -70,3 +76,4 @@ if (-not ($UserPath -split ';' -contains $Dir)) {
 Write-Host "설치 완료: $Dir\mcp-test.cmd"
 Write-Host "처음 한 번, 관리자 PowerShell 에서 샌드박스 준비: node `"$SrtCli`" windows-install"
 & $Goose.FullName --version
+}
