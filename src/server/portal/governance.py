@@ -179,7 +179,8 @@ def register(app, h):
         rows = []
         for repo in all_repos():
             full = repo["full_name"]
-            if full == f"{h.publisher.MARKET_OWNER}/{h.publisher.MARKET_REPO}":
+            if full in (f"{h.publisher.MARKET_OWNER}/{h.publisher.MARKET_REPO}",
+                        f"{h.publisher.MARKET_OWNER}/mcp-remote"):   # 마켓플레이스·반입 도구 저장소는 MCP 자산이 아님
                 continue
             owner = repo["owner"]["login"]
             rq = sorted(by_repo_req.get(full, []), key=lambda r: r.get("created", 0))
