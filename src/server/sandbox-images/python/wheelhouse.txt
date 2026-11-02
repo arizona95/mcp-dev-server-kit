@@ -1,0 +1,6 @@
+# src/samples/{good,bad}/requirements.txt + 빌드 도구
+mcp==1.30.0
+pyyaml==5.3.1
+requests==2.31.0
+setuptools>=68
+wheel

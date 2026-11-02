@@ -1,0 +1,56 @@
+/* 포털 공통 스타일 — 흰 배경, Noto Sans, 파란 강조, 둥근 알약 버튼·칩 */
+:root {
+  --bg: #fff; --soft: #f5f7fb; --card: #fff; --line: #e6e8ec;
+  --ink: #111; --ink2: #222; --sub: #666; --sub2: #888;
+  --blue: #2189ff; --blue-dk: #1428a0; --btn: #2a5fdc; --chip: rgba(36, 85, 197, .06);
+  --ok: #1a7f37; --ok-bg: #eaf6ee; --no: #d92d20; --no-bg: #fdeeed;
+}
+* { box-sizing: border-box }
+html, body { margin: 0; background: var(--bg); color: var(--ink) }
+body { font: 14px/1.6 "Noto Sans KR", "Noto Sans", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; letter-spacing: -.4px }
+
+.top { position: sticky; top: 0; z-index: 10; display: flex; gap: 12px; align-items: center; padding: 8px 24px; background: rgba(255,255,255,.9); backdrop-filter: blur(8px) }
+.brand { padding: 8px 14px; border-radius: 6px; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.12); font-weight: 700; font-size: 13px; letter-spacing: -.2px }
+.nav { display: flex; gap: 4px; padding: 4px; border-radius: 8px; background: var(--soft) }
+.nav a { padding: 4px 12px; border-radius: 6px; color: var(--ink2); text-decoration: none; font-size: 13px; font-weight: 500 }
+.nav a.on { background: #dbe9ff; color: var(--blue-dk); font-weight: 700 }
+
+.hero { padding: 40px 16px 32px; text-align: center; background: linear-gradient(180deg, var(--soft), #fff) }
+.hero .tag { display: inline-block; padding: 6px 18px; border-radius: 30px; background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.06); font-size: 13px; font-weight: 500 }
+.hero h1 { margin: 14px 0 6px; font-size: 34px; line-height: 1.2; font-weight: 700; letter-spacing: -1px }
+.hero p { margin: 0; color: var(--sub); font-size: 15px }
+
+main { max-width: 1160px; margin: 0 auto; padding: 0 24px 96px }
+.card { background: var(--card); border-radius: 20px; box-shadow: 0 4px 30px rgba(0,0,0,.07); padding: 28px 32px; margin-top: 20px }
+.card .kicker { font-size: 12px; color: var(--ink2); margin: 0 0 8px }
+.card h2 { margin: 0 0 16px; font-size: 20px; line-height: 1.35; font-weight: 700; color: var(--blue) }
+.card .row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap }
+
+.chip { display: inline-block; padding: 2px 10px; border-radius: 18px; background: var(--chip); color: var(--blue); font-size: 12px; font-weight: 700; white-space: nowrap }
+.chip.ok { background: var(--ok-bg); color: var(--ok) }
+.chip.no { background: var(--no-bg); color: var(--no) }
+.chip.gray { background: var(--soft); color: var(--sub2); font-weight: 500 }
+
+.btn { display: inline-block; padding: 8px 18px; border: 0; border-radius: 8px; background: var(--btn); color: #fff; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; text-decoration: none }
+.btn.line { background: #fff; color: var(--ink2); box-shadow: inset 0 0 0 1px var(--line) }
+.btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 6px }
+.btn:disabled { opacity: .5; cursor: wait }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px }
+th { text-align: left; padding: 8px 6px; color: var(--sub2); font-weight: 500; font-size: 12px; border-bottom: 1px solid var(--ink2); white-space: nowrap }
+td { padding: 9px 6px; border-bottom: 1px solid var(--line); color: var(--ink2); vertical-align: middle }
+td.mono, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; letter-spacing: 0; word-break: break-all }
+td.dim, .dim { color: var(--sub2); font-size: 12px }
+td.nw { white-space: nowrap }
+.scroll { overflow-x: auto }
+
+form.inline { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px }
+input { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 13px; color: var(--ink); background: #fff }
+input:focus { outline: 2px solid #dbe9ff; border-color: var(--blue) }
+.err { color: var(--no); font-size: 14px; margin-top: 8px }
+
+@media (max-width: 640px) {
+  .hero h1 { font-size: 28px } .hero p { font-size: 14px }
+  .card { padding: 22px 16px } .card h2 { font-size: 18px }
+  .top { padding: 8px 16px } main { padding: 0 16px 64px }
+}

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>외부 접속 — MCP Dev Kit</title>
+<link rel="stylesheet" href="/static/kit.css">
+<style>
+input[name=host] { flex: 2 1 220px } input[name=port] { width: 90px } input[name=reason] { flex: 3 1 240px }
+#tests .why { display: block; margin-top: 2px }
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="brand">MCP Dev Kit</span>
+  <nav class="nav" id="nav" data-on="/admin/egress"></nav>
+</header>
+
+<section class="hero">
+  <span class="tag">외부 접속 통제</span>
+  <h1 id="title">…</h1>
+  <p>나머지는 모두 차단</p>
+</section>
+
+<main>
+  <section class="card">
+    <p class="kicker">허용목록</p>
+    <h2>열린 곳</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>주소</th><th>포트</th><th>용도</th><th></th></tr></thead>
+      <tbody id="rules"></tbody>
+    </table></div>
+    <form class="inline" id="add">
+      <input name="host" placeholder="주소" required>
+      <input name="port" type="number" value="443" min="1" max="65535" required>
+      <input name="reason" placeholder="용도" required>
+      <button class="btn">추가</button>
+    </form>
+    <div class="err" id="add-err"></div>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <div><p class="kicker">검증</p><h2>지금 막히는지 확인</h2></div>
+      <button class="btn" id="test">검증</button>
+    </div>
+    <div class="scroll"><table id="test-table" hidden>
+      <thead><tr><th>시도</th><th>기대</th><th>결과</th></tr></thead>
+      <tbody id="tests"></tbody>
+    </table></div>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <div><p class="kicker">기록</p><h2>바깥 연결</h2></div>
+      <span class="chip no" id="blocked"></span>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>시각</th><th>결과</th><th>대상</th></tr></thead>
+      <tbody id="log"></tbody>
+    </table></div>
+    <p><button class="btn line sm" id="reload-log">새로 고침</button></p>
+  </section>
+
+  <section class="card">
+    <p class="kicker">이력</p>
+    <h2>허용목록 변경</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>시각</th><th>변경</th><th>주소</th><th>용도</th><th>누가</th></tr></thead>
+      <tbody id="changes"></tbody>
+    </table></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const when = ts => new Date(ts * 1000).toLocaleString("ko-KR", {hour12: false});
+const chip = open => `<span class="chip ${open ? "ok" : "no"}">${open ? "허용" : "차단"}</span>`;
+const empty = (n, t) => `<tr><td colspan="${n}" class="dim">${t}</td></tr>`;
+
+async function api(path, opt) {
+  const r = await fetch(path, opt);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || r.statusText);
+  return body;
+}
+
+async function loadState() {
+  const s = await api("/api/egress");
+  $("title").textContent = `${s.rules.length}곳만 열림`;
+  $("blocked").textContent = s.direct_blocked == null ? "" : `프록시 우회 차단 ${s.direct_blocked}건`;
+  $("rules").innerHTML = s.rules.map(r => `<tr>
+    <td class="mono">${esc(r.host)}</td><td>${r.port}</td><td>${esc(r.reason)}</td>
+    <td class="nw">${r.builtin ? '<span class="chip gray">기본</span>'
+      : `<button class="btn line sm" data-del="${esc(r.host)}" data-port="${r.port}">삭제</button>`}</td></tr>`).join("");
+  $("changes").innerHTML = s.changes.map(c => `<tr><td class="nw dim">${when(c.ts)}</td>
+    <td>${c.action === "add" ? "추가" : "삭제"}</td><td class="mono">${esc(c.host)}:${c.port}</td>
+    <td>${esc(c.reason)}</td><td>${esc(c.who)}</td></tr>`).join("") || empty(5, "없음");
+}
+
+async function loadLog() {
+  const rows = await api("/api/egress/log?limit=20");
+  $("log").innerHTML = rows.map(e => `<tr><td class="nw dim">${when(e.ts)}</td><td>${chip(e.allowed)}</td>
+    <td class="mono">${esc(e.target)}</td></tr>`).join("") || empty(3, "없음");
+}
+
+$("add").onsubmit = async ev => {
+  ev.preventDefault(); $("add-err").textContent = "";
+  const f = new FormData(ev.target);
+  try {
+    await api("/api/egress", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({host: f.get("host"), port: Number(f.get("port")), reason: f.get("reason")})});
+    ev.target.reset(); await loadState();
+  } catch (e) { $("add-err").textContent = e.message; }
+};
+
+$("rules").onclick = async ev => {
+  const b = ev.target.closest("[data-del]"); if (!b) return;
+  b.disabled = true;
+  try { await api(`/api/egress/${encodeURIComponent(b.dataset.del)}/${b.dataset.port}`, {method: "DELETE"}); }
+  catch (e) { $("add-err").textContent = e.message; }
+  await loadState();
+};
+
+$("test").onclick = async () => {
+  $("test").disabled = true;
+  try {
+    const rows = await api("/api/egress/selftest", {method: "POST"});
+    $("tests").innerHTML = rows.map(c => `<tr><td>${esc(c.name)}<span class="why dim mono">${esc(c.detail)}</span></td>
+      <td class="nw">${esc(c.expect)}</td><td class="nw">${chip(c.actual === "허용")}${c.pass ? "" : ' <span class="chip no">다름</span>'}</td></tr>`).join("");
+    $("test-table").hidden = false;
+    await Promise.all([loadState(), loadLog()]);
+  } finally { $("test").disabled = false; }
+};
+
+$("reload-log").onclick = loadLog;
+loadState(); loadLog();
+</script>
+<script src="/static/nav.js"></script>
+</body>
+</html>

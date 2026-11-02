@@ -1,0 +1,4 @@
+#!/bin/sh
+# docker exec mcp-dev-server-kit kit <init|verify|mail-template>
+export KIT_DATA=/data HTTPS_PROXY=http://127.0.0.1:3128 HTTP_PROXY=http://127.0.0.1:3128 NO_PROXY=127.0.0.1,localhost
+exec /opt/kit/venv/bin/python /opt/kit/server/kit-cli/kit.py "$@"

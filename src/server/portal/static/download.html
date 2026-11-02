@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>다운로드 — MCP Dev Kit</title>
+<link rel="stylesheet" href="/static/kit.css">
+<style>
+.tabs { display: inline-flex; gap: 4px; padding: 4px; border-radius: 8px; background: var(--soft); margin-bottom: 12px }
+.tabs button { border: 0; background: none; padding: 5px 14px; border-radius: 6px; font: inherit; font-size: 13px; cursor: pointer; color: var(--ink2) }
+.tabs button.on { background: #dbe9ff; color: var(--blue-dk); font-weight: 700 }
+pre { margin: 0; padding: 14px 16px; border-radius: 10px; background: #0f1720; color: #e6edf3; font: 12px/1.6 ui-monospace, Consolas, monospace; letter-spacing: 0; white-space: pre-wrap; word-break: break-all }
+.cmd { position: relative } .cmd .btn { position: absolute; top: 8px; right: 8px }
+.key { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+.key code { padding: 6px 10px; border-radius: 8px; background: var(--soft); font: 12px ui-monospace, Consolas, monospace; letter-spacing: 0; word-break: break-all }
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="brand">MCP Dev Kit</span>
+  <nav class="nav" id="nav" data-on="/download"></nav>
+</header>
+
+<section class="hero">
+  <span class="tag">MCP 테스트 도구</span>
+  <h1>goose <span id="ver"></span></h1>
+  <p id="os-line">…</p>
+</section>
+
+<main>
+  <section class="card">
+    <p class="kicker">1</p>
+    <h2>개인 키</h2>
+    <div class="key">
+      <button class="btn" id="issue">발급</button>
+      <code id="token" hidden></code>
+      <span class="dim" id="token-note"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <p class="kicker">2</p>
+    <h2>설치</h2>
+    <div class="tabs"><button data-os="linux">리눅스</button><button data-os="windows">윈도우</button></div>
+    <div class="cmd"><pre id="cmd"></pre><button class="btn line sm" id="copy">복사</button></div>
+    <p class="dim" id="file-line"></p>
+  </section>
+
+  <section class="card">
+    <p class="kicker">3</p>
+    <h2>사용</h2>
+    <pre>mcp-test
+mcp-test run --with-extension "python my_mcp.py" -t "툴 목록 보여줘"</pre>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const isWin = /win/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+let info, os = isWin ? "windows" : "linux", token = null;
+
+async function api(path, opt) {
+  const r = await fetch(path, opt);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || r.statusText);
+  return body;
+}
+
+function render() {
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.os === os));
+  const k = token || "<개인 키>";
+  $("cmd").textContent = os === "windows"
+    ? `$env:KIT_TOKEN='${k}'; irm ${info.public}/download/install.ps1 | iex`
+    : `curl -fsSL ${info.public}/download/install.sh | KIT_TOKEN='${k}' sh`;
+  const g = info.goose[os === "windows" ? "windows-x64" : "linux-x64"];
+  $("file-line").textContent = `${g.file} · sha256 ${g.sha256.slice(0, 16)}…`;
+}
+
+(async () => {
+  const [me, d, t] = await Promise.all([api("/api/me"), api("/api/download"), api("/api/token")]);
+  info = d;
+  $("ver").textContent = d.version;
+  $("os-line").textContent = `${me.login} · ${isWin ? "윈도우" : "리눅스"}에서 접속`;
+  $("token-note").textContent = t.has_token ? `발급됨 ${new Date(t.created * 1000).toLocaleDateString("ko-KR")} · 다시 발급하면 예전 키는 끊김` : "";
+  render();
+})();
+
+$("issue").onclick = async () => {
+  token = (await api("/api/token", {method: "POST"})).token;
+  $("token").textContent = token; $("token").hidden = false;
+  $("token-note").textContent = "이 화면에서만 보임";
+  render();
+};
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { os = b.dataset.os; render(); });
+$("copy").onclick = () => navigator.clipboard.writeText($("cmd").textContent);
+</script>
+<script src="/static/nav.js"></script>
+</body>
+</html>
