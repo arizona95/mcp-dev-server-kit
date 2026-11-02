@@ -36,7 +36,7 @@ input[name=name] { flex: 1 1 200px } input[name=description] { flex: 3 1 280px }
     <p class="kicker">2</p>
     <h2>다음 순서</h2>
     <ol class="steps">
-      <li><a href="/download">다운로드</a>에서 개인 키를 받고 goose(<span class="mono">mcp-test</span>)를 설치합니다.</li>
+      <li><a href="/download">다운로드</a>에서 설치 코드로 goose(<span class="mono">mcp-test</span>)를 설치합니다(처음 한 번).</li>
       <li>코드를 받습니다.<pre id="clone"></pre></li>
       <li>내 PC 에서 시험합니다.<pre id="try"></pre></li>
       <li>올립니다 — <span class="mono">git push</span> 하거나 <a href="/mcp">MCP 등록</a>에서 zip 으로 올리고 [검사 요청].</li>
@@ -69,7 +69,7 @@ $("f").onsubmit = async ev => {
       body: JSON.stringify({name: f.get("name"), description: f.get("description")})});
     const name = r.repo.split("/")[1];
     $("clone").textContent = `git clone ${r.clone}\ncd ${name}`;
-    $("try").textContent = `pip install -e .\nmcp-test run --with-extension "${name}-mcp" -t "hello 툴로 kim 에게 인사해 줘"`;
+    $("try").textContent = `pip install -e .\nmcp-test --with-extension "${name}-mcp"     (대화형 — 툴 호출마다 승인)`;
     $("next").hidden = false; ev.target.reset(); repos();
   } catch (e) { $("err").textContent = e.message; }
 };

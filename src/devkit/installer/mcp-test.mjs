@@ -23,7 +23,8 @@ const CONF = WIN ? join(process.env.LOCALAPPDATA, "mcp-dev-kit") : join(HOME, ".
 const kit = JSON.parse(readFileSync(join(CONF, "kit.json"), "utf8"));   // {public, dir, goose, srt_cli, ca_bundle}
 const args = process.argv.slice(2);
 const mode = args[0] === "run" ? "run" : "session";
-const gooseArgs = args.length ? args : ["session"];
+// mcp-test --with-extension … 처럼 옵션으로 시작하면 대화형(goose session)으로
+const gooseArgs = args.length && !args[0].startsWith("-") ? args : ["session", ...args];
 const say = m => process.stderr.write(`mcp-test: ${m}\n`);
 const rand = () => randomBytes(12).toString("hex");
 
@@ -31,13 +32,20 @@ const rand = () => randomBytes(12).toString("hex");
 async function login() {
   const state = rand();
   return await new Promise((resolve, reject) => {
+    // 토큰은 POST 본문으로 받는다 — 주소(쿼리)에 실으면 브라우저 방문 기록(=PC 디스크)에 남는다
     const srv = httpServer((req, res) => {
       const u = new URL(req.url, "http://127.0.0.1");
-      if (u.pathname !== "/cb" || u.searchParams.get("state") !== state) { res.writeHead(404).end(); return; }
-      res.writeHead(200, {"Content-Type": "text/html; charset=utf-8"})
-        .end("<!doctype html><meta charset=utf-8><title>MCP Dev Kit</title><p style='font:16px sans-serif;margin:40px'>mcp-test 로그인 완료 — 이 창을 닫아도 됩니다.</p>");
-      srv.close();
-      resolve(u.searchParams.get("token"));
+      if (u.pathname !== "/cb" || req.method !== "POST") { res.writeHead(404).end(); return; }
+      let body = "";
+      req.on("data", c => { body += c; if (body.length > 4096) req.destroy(); });
+      req.on("end", () => {
+        const f = new URLSearchParams(body);
+        if (f.get("state") !== state) { res.writeHead(400).end(); return; }
+        res.writeHead(200, {"Content-Type": "text/html; charset=utf-8"})
+          .end("<!doctype html><meta charset=utf-8><title>MCP Dev Kit</title><p style='font:16px sans-serif;margin:40px'>mcp-test 로그인 완료 — 이 창을 닫아도 됩니다.</p>");
+        srv.close();
+        resolve(f.get("token"));
+      });
     });
     srv.listen(0, "127.0.0.1", () => {
       const url = `${kit.public}/cli/login?port=${srv.address().port}&state=${state}`;

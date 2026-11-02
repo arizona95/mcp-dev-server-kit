@@ -265,7 +265,7 @@ def token_hash(t):
 
 
 def token_user(request: Request, kind=("run",)):
-    """Authorization: Bearer <개인 키> → 로그인 이름. 없거나 틀리면 None."""
+    """Authorization: Bearer <실행 토큰·설치 코드> → 로그인 이름. 없거나 지났거나 종류가 다르면 None."""
     auth = request.headers.get("authorization", "")
     if not auth.lower().startswith("bearer "):
         return None
@@ -310,7 +310,12 @@ def cli_login(port: int, state: str, u=Depends(user)):
         raise HTTPException(400, "잘못된 요청")
     t = mint(u["login"], "run", RUN_TTL, ip=u["ip"])
     event("run_token", u["login"], ip=u["ip"])
-    return RedirectResponse(f"http://127.0.0.1:{port}/cb?" + urllib.parse.urlencode({"state": state, "token": t}))
+    # 주소(쿼리)로 넘기면 브라우저 방문 기록에 남는다 — 자동 제출 폼(POST 본문)으로 PC 의 mcp-test 에 넘긴다
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(f"""<!doctype html><meta charset="utf-8"><title>MCP Dev Kit</title>
+<body onload="document.forms[0].submit()" style="font:16px sans-serif;margin:40px">mcp-test 로 넘기는 중…
+<form method="post" action="http://127.0.0.1:{port}/cb"><input type="hidden" name="state" value="{state}"><input type="hidden" name="token" value="{t}"></form></body>""",
+                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
 class TokenRevoke(BaseModel):
@@ -340,10 +345,10 @@ def token_info(u=Depends(user)):
 
 @app.get("/_auth/llm")
 def auth_llm(request: Request):
-    """nginx auth_request: /llm/ 요청마다 개인 키를 확인한다."""
+    """nginx auth_request: /llm/ 요청마다 실행 토큰을 확인한다."""
     login = token_user(request)
     if not login:
-        return JSONResponse({"detail": "개인 키가 없거나 틀렸습니다"}, status_code=401)
+        return JSONResponse({"detail": "실행 토큰이 없거나 지났습니다 — mcp-test 를 다시 실행해 로그인하세요"}, status_code=401)
     return JSONResponse({"login": login}, headers={"X-Kit-User": login})
 
 
@@ -377,9 +382,9 @@ def install_ps1():
 
 @app.get("/download/files/{name}")
 def download_file(name: str, request: Request):
-    """goose 파일 — 로그인 세션이나 개인 키가 있어야 받는다."""
+    """설치 파일 — 로그인 세션이나 설치 코드가 있어야 받는다."""
     if not (request.session.get("user") or token_user(request, kind=("download", "run"))):
-        raise HTTPException(401, "로그인하거나 개인 키를 붙여 주세요")
+        raise HTTPException(401, "로그인하거나 설치 코드를 붙여 주세요")
     for os_name, (file, _) in goose_files().items():
         if name == file:
             return FileResponse(DEVKIT / "hosts" / "goose" / os_name / file, filename=file)
@@ -738,8 +743,11 @@ if __name__ == "__main__":
 
 ```
 pip install -e .
-mcp-test run --with-extension "{entry}" -t "hello 툴로 kim 에게 인사해 줘"
+mcp-test --with-extension "{entry}"
 ```
+
+실행할 때마다 브라우저로 사내 로그인을 확인하고, 툴을 부를 때마다 승인을 묻습니다.
+키(토큰)는 코드에 넣지 말고 kit-mcp.json 의 "secrets" 에 이름만 적은 뒤 사내 Git 비밀값에 넣습니다.
 
 ## 올리기
 
@@ -1045,10 +1053,10 @@ def devpolicy_for_client():
 
 @app.get("/api/devkit/policy")
 def devkit_policy(request: Request):
-    """mcp-test 가 실행할 때마다 개인 키로 받는다. 받은 기록이 모니터링에 남는다."""
+    """mcp-test 가 실행할 때마다 실행 토큰으로 받는다. 받은 기록이 모니터링에 남는다."""
     login = token_user(request)
     if not login:
-        raise HTTPException(401, "개인 키가 없거나 틀렸습니다")
+        raise HTTPException(401, "실행 토큰이 없거나 지났습니다")
     event("policy_fetch", login, ua=request.headers.get("user-agent", "")[:80],
           mode=request.query_params.get("mode", ""), ip=request.headers.get("x-real-ip", ""))
     return devpolicy_for_client()
