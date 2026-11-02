@@ -1,2 +1,5 @@
 dist/
 src/images/*.tar
+gate.env
+gate.env.example
+tls/
