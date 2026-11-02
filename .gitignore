@@ -4,3 +4,5 @@ gate.env
 gate.env.example
 tls/
 !build/
+!*.json
+!.env.example

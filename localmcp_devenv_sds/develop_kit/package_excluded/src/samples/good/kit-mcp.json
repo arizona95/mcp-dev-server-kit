@@ -1,0 +1,6 @@
+{
+  "name": "unit-convert",
+  "description": "길이·무게 단위 변환 (읽기 전용)",
+  "entry": "unit-convert-mcp",
+  "egress": []
+}
