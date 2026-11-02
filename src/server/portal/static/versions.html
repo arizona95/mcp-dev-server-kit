@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>버전 관리 — MCP Dev Kit</title>
+<link rel="stylesheet" href="/static/kit.css">
+<style>.pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; background:#eef2f7 } .ok { background:#e3f5e9 } .bad { background:#fde8e8 }
+.chg { font-size:12px; color:var(--sub) } .chg b { color:#1f5fd6 }</style>
+</head>
+<body>
+<header class="top"><span class="brand">MCP Dev Kit</span><nav class="nav" id="nav" data-on="/admin/versions"></nav></header>
+<section class="hero"><span class="tag">버전 관리</span><h1 id="title">…</h1><p>인터넷에서 받지 않습니다 — 서버의 버전 폴더(/srv/kit/releases)에 넣거나 여기서 올린 묶음만, 서명이 맞을 때만 설치합니다</p></section>
+<main>
+  <section class="card"><p class="kicker">지금</p><h2 id="cur"></h2>
+    <div class="scroll"><table><thead><tr><th>구성요소</th><th>버전</th></tr></thead><tbody id="comps"></tbody></table></div>
+  </section>
+  <section class="card"><p class="kicker">배포 묶음</p><h2>설치할 수 있는 버전</h2>
+    <div class="scroll"><table><thead><tr><th>버전</th><th>확인</th><th>바뀌는 구성요소</th><th></th></tr></thead><tbody id="rels"></tbody></table></div>
+    <form class="inline" id="up"><input type="file" id="file" accept=".tar"> <button class="btn line">묶음 올리기</button> <span class="dim" id="upmsg"></span></form>
+    <p class="dim">묶음 = <span class="mono">mcp-dev-server-kit-v&lt;버전&gt;/</span> 폴더(이미지 tar · manifest.json · 서명). 폴더째 서버 <span class="mono">/srv/kit/releases/</span> 에 넣으면 바로 목록에 뜹니다.</p>
+    <div class="err" id="err"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function api(path, opt) { const r = await fetch(path, opt); const b = await r.json().catch(() => ({})); if (!r.ok) throw new Error(b.detail || r.statusText); return b; }
+let V;
+function paint() {
+  const c = V.current;
+  $("title").textContent = `지금 v${c.version}`;
+  $("cur").textContent = `v${c.version} · 빌드 ${c.built || "-"} · 기반 ${c.base_image || "-"} · apt ${c.apt_snapshot || "-"}`;
+  $("comps").innerHTML = c.components.map(x => `<tr><td>${esc(x.name)}</td><td class="mono">${esc(x.version || "-")}</td></tr>`).join("");
+  const busy = ["running", "rolling_back"].includes(V.status.state);
+  $("rels").innerHTML = V.releases.map(r => {
+    const ok = !r.problems.length, same = r.version === c.version;
+    return `<tr><td><b>v${esc(r.version)}</b><br><span class="dim">${esc(r.built || "")}</span><br><span class="dim mono">${esc(r.path)}</span></td>
+      <td>${ok ? '<span class="pill ok">서명·해시 확인</span>' : `<span class="pill bad">설치 불가</span><div class="chg">${r.problems.map(esc).join("<br>")}</div>`}</td>
+      <td class="chg">${same ? "지금 버전" : (r.changes.map(x => `${esc(x.name)} ${esc(x.from || "-")} → <b>${esc(x.to || "-")}</b>`).join("<br>") || "구성요소 같음")}</td>
+      <td>${ok && !same ? `<button class="btn sm" data-v="${esc(r.version)}"${busy ? " disabled" : ""}>설치</button>` : ""}</td></tr>`; }).join("") || '<tr><td colspan="4" class="dim">없음 — 버전 폴더에 묶음을 넣어 주세요</td></tr>';
+}
+async function load() { try { V = await api("/api/versions"); paint(); } catch (e) { $("err").textContent = e.message; } }
+$("rels").onclick = async ev => { const b = ev.target.closest("[data-v]"); if (!b) return;
+  if (!b.dataset.sure) {   // 한 번 더 눌러야 시작(창 대화 상자 없이)
+    b.dataset.sure = 1; b.textContent = `정말 v${b.dataset.v} 설치`;
+    $("err").textContent = "정리 → 패치 적용 검사 → 백업 → 적용 → 점검 순서로 진행하고, 실패하면 지금 버전으로 되돌립니다. 진행 중에는 아무것도 바꿀 수 없습니다."; return; }
+  try { await api("/api/versions/install", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({version: b.dataset.v})}); window.KIT_UPDATE_WATCH && window.KIT_UPDATE_WATCH(); }
+  catch (e) { $("err").textContent = e.message; } };
+$("up").onsubmit = async ev => { ev.preventDefault(); const f = $("file").files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("file", f); $("upmsg").textContent = "올리는 중…";
+  try { const r = await api("/api/versions/upload", {method: "POST", body: fd}); $("upmsg").textContent = `${r.folder} 올림`; load(); } catch (e) { $("upmsg").textContent = ""; $("err").textContent = e.message; } };
+load();
+</script>
+<script src="/static/nav.js"></script>
+</body>
+</html>

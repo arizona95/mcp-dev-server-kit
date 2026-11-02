@@ -8,7 +8,8 @@ if [ "${1:-}" = "init" ] || [ "${1:-}" = "mail-template" ]; then exec /opt/kit/s
 # 공급자 키(LLM_API_KEY)는 키 저장소(Gitea 시크릿 KIT_LLM_API_KEY — `kit llm-key`)에 둔다. gate.env 에 남아 있으면 그것을 쓰되 경고한다.
 : "${KIT_PUBLIC_URL:?gate.env 에 KIT_PUBLIC_URL 이 필요합니다 (예: https://mcp.사내도메인)}"
 # 재시작이면 지난번 PID 파일이 남아 있다
-rm -f /run/squid.pid /run/supervisord.pid /run/kit-egress.sock /run/kit-secrets.sock
+rm -f /run/squid.pid /run/supervisord.pid /run/kit-egress.sock /run/kit-secrets.sock /run/kit-update.sock
+mkdir -p /data/update /data/releases && chown root:kit /data/update && chmod 755 /data/update && chown kit:kit /data/releases
 # 메모리에만 두는 키(P7): /dev/shm(tmpfs) — 디스크에 평문 키를 남기지 않는다. LiteLLM 마스터 키는 시작할 때마다 새로.
 mkdir -p /dev/shm/kit && chown root:kit /dev/shm/kit && chmod 750 /dev/shm/kit && mkdir -p /dev/shm/kit-litellm && chown kit:kit /dev/shm/kit-litellm && chmod 750 /dev/shm/kit-litellm
 ( umask 027; /opt/kit/venv/bin/python -c "import secrets; print('sk-kit-' + secrets.token_urlsafe(32))" > /dev/shm/kit/master_key )

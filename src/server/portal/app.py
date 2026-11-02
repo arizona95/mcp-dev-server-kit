@@ -1164,5 +1164,11 @@ def devpolicy_page(_=Depends(admin)):
 import governance  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
-governance.register(app, SimpleNamespace(user=user, admin=admin, superadmin=superadmin, event=event, gitea_admin=gitea_admin,
-                                         publisher=publisher, REQUESTS=REQUESTS, effective_verdict=effective_verdict))
+_h = SimpleNamespace(user=user, admin=admin, superadmin=superadmin, event=event, gitea_admin=gitea_admin,
+                     publisher=publisher, REQUESTS=REQUESTS, effective_verdict=effective_verdict)
+governance.register(app, _h)
+
+# ── 버전 관리: 배포 묶음 목록·설치·진행 상태 · 적용 중 잠금 ─────────────────
+import versions  # noqa: E402
+
+versions.register(app, _h)

@@ -8,8 +8,9 @@ git pull -q --ff-only
 echo "== $(git log -1 --format='%h %s')"
 ./build/build.sh "$VER"
 docker rm -f mcp-dev-server-kit >/dev/null 2>&1 || true
+mkdir -p /srv/kit-releases
 docker run -d --name mcp-dev-server-kit --restart unless-stopped --cap-add NET_ADMIN --env-file gate.env \
-  -p 443:443 -v mcp-kit-data:/data -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/tls":/etc/kit/tls:ro \
+  -p 443:443 -v mcp-kit-data:/data -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/tls":/etc/kit/tls:ro -v /srv/kit-releases:/releases:ro \
   "mcp-dev-server-kit:$VER" >/dev/null
 sleep 45
 docker exec mcp-dev-server-kit kit verify 2>&1 | grep -v '^\[verify-'

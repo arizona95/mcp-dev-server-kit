@@ -228,6 +228,11 @@ def sso():
 
 
 def verify():
+    if "--quick" in sys.argv:   # 업데이트 사전·사후 점검 — 오래 걸리는 샘플 검사·osv 는 뺀다
+        results = [check("서비스", services), check("키 저장소 (디스크에 평문 키 없음)", key_store), check("외부 접속 통제", egress),
+                   check("LLM tool calling", llm_tool_calling)]
+        print("전 항목 OK" if all(results) else f"실패 {results.count(False)}건")
+        return 0 if all(results) else 1
     results = [check("서비스", services), check("키 저장소 (디스크에 평문 키 없음)", key_store), check("외부 접속 통제", egress), check("LLM tool calling", llm_tool_calling),
                check("osv.dev 접속", osv_reach), check("good 샘플 통과 · bad 샘플 차단", samples)]
     print("전 항목 OK" if all(results) else f"실패 {results.count(False)}건")
@@ -240,6 +245,8 @@ def main():
         print(INIT, end="")
     elif cmd == "verify":
         sys.exit(verify())
+    elif cmd == "version":   # 구성요소 버전표
+        os.execv("/opt/kit/venv/bin/python", ["/opt/kit/venv/bin/python", str(SERVER / "kit-cli" / "version.py"), *sys.argv[2:]])
     elif cmd == "device-cert":   # 기기 인증서(P6) 발급·폐기
         os.execv("/opt/kit/venv/bin/python", ["/opt/kit/venv/bin/python", str(SERVER / "kit-cli" / "devcert.py"), *sys.argv[2:]])
     elif cmd == "llm-key":

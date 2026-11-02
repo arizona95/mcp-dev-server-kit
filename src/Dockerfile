@@ -46,6 +46,10 @@ COPY samples /opt/kit/samples
 COPY images /opt/kit/images
 COPY server /opt/kit/server
 RUN ln -s /opt/kit/server/kit-cli/kit /usr/local/bin/kit
+# 빌드 정보 — kit version · 배포 묶음 manifest 가 읽는다
+ARG KIT_COMMIT=""
+RUN printf '{"version":"%s","commit":"%s","built":"%s","base_image":"debian:bookworm-20261005-slim","apt_snapshot":"%s"}\n' \
+      "$KIT_VERSION" "$KIT_COMMIT" "$(date -u +%Y-%m-%dT%H:%MZ)" "$APT_SNAPSHOT" > /opt/kit/BUILD.json
 ENV KIT_DATA=/data
 VOLUME /data
 EXPOSE 8080
