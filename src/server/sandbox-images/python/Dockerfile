@@ -8,6 +8,9 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources \
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/py
 ENV PATH=/opt/py/bin:$PATH
+# uv — 윈도우 PC 용 의존성 목록을 윈도우 조건(sys_platform=win32 등)으로 풀 때 쓴다(pip download --platform 은 조건을 풀지 않음) · 해시 고정
+COPY uv.lock /opt/uv.lock
+RUN pip install --no-cache-dir --require-hashes -q -r /opt/uv.lock
 RUN useradd -m -u 1000 sandbox && mkdir /work && chown sandbox /work
 COPY mcp_probe.py /opt/probe/mcp_probe.py
 # kit verify 용 샘플 의존성 — 설치 직후 외부(PyPI) 없이 good/bad 샘플을 검사할 수 있게 이미지에 넣어 둔다

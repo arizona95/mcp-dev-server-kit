@@ -65,7 +65,7 @@ def managed_mcp(registry):
                          "args": ["--default-index", f"{public}/approved/simple",
                                   "--from", f"{e['package']}=={e['version']}", e["entry"]],
                          # uv 는 기본으로 내장 루트 인증서만 본다 → 사내 CA(OS 저장소)를 쓰게
-                         "env": {"UV_NATIVE_TLS": "true"}}
+                         "env": {"UV_NATIVE_TLS": "true", "UV_SYSTEM_CERTS": "true"}}
     return {"mcpServers": servers}
 
 

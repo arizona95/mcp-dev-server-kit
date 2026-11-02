@@ -133,13 +133,23 @@ def sandbox_run(root, manifest, req_id, artifacts, offline=False):
     # /work/src 는 docker cp 로 들어와 root 소유 → 쓰기 가능한 사본에서 빌드
     # rug pull 방지(P16): 설치된 의존성의 정확한 버전(lock)과 그 휠(리눅스·윈도우 × 파이썬 3.11~3.13)을 검사 때 받아 둔다 —
     # 승인하면 이 휠들만 승인 저장소에 올라가고, 임직원 PC 는 그 저장소만 본다(PyPI 를 보지 않음)
+    # 윈도우 PC 에서만 붙는 의존성(예: mcp → pywin32)은 리눅스 설치(pip freeze)에 없다 — uv 로 윈도우 조건에서 따로 풀어
+    # 파이썬 판마다 lock-win-<판>.txt 를 만들고, 윈도우 휠은 그 목록으로 받는다. 전체 lock = 리눅스 ∪ 윈도우
+    uv_src = f"--index-url {pip_index} " if pip_index else ""
+    reqs = "$( [ -f /work/build/pyproject.toml ] && echo /work/build/pyproject.toml ) $( [ -f /work/build/requirements.txt ] && echo /work/build/requirements.txt )"
     deps = "" if offline else (
         "pip freeze --path /work/.deps | grep -v ' @ ' | grep -vi \"^$OWNRE==\" > /work/dist/lock.txt || true; "
+        "export UV_CACHE_DIR=/work/.uvcache; "
+        "for v in 3.11 3.12 3.13; do "
+        f"uv pip compile -q --no-header --no-annotate --python-platform windows --python-version $v -c /work/dist/lock.txt {uv_src}{reqs} 2>/dev/null "
+        "| grep '==' | grep -vi \"^$OWNRE==\" > /work/dist/lock-win-$v.txt || echo \"DEP_MISS windows $v (의존성 풀기 실패)\"; done; "
         "for plat in manylinux2014_x86_64 win_amd64; do for v in 3.11 3.12 3.13; do "
-        f"pip download -q --disable-pip-version-check --no-deps --only-binary=:all: --platform $plat --python-version $v --implementation cp -d /work/dist {source}-r /work/dist/lock.txt 1>&2 "
+        "L=/work/dist/lock.txt; [ $plat = win_amd64 ] && [ -s /work/dist/lock-win-$v.txt ] && L=/work/dist/lock-win-$v.txt; "
+        f"pip download -q --disable-pip-version-check --no-deps --only-binary=:all: --platform $plat --python-version $v --implementation cp -d /work/dist {source}-r $L 1>&2 "
         "|| while read -r l; do [ -n \"$l\" ] || continue; "
         f"pip download -q --disable-pip-version-check --no-deps --only-binary=:all: --platform $plat --python-version $v --implementation cp -d /work/dist {source}\"$l\" 1>&2 "
-        "|| echo \"DEP_MISS $plat $v $l\"; done < /work/dist/lock.txt; done; done; echo DEP_LOCK; cat /work/dist/lock.txt; echo DEP_LOCK_END; ")
+        "|| echo \"DEP_MISS $plat $v $l\"; done < $L; done; done; "
+        "echo DEP_LOCK; cat /work/dist/lock.txt /work/dist/lock-win-*.txt 2>/dev/null | sort -u; echo DEP_LOCK_END; ")
     script = (f"set -e; cp -r /work/src /work/build; {install} 1>&2; {wheel} 1>&2; "
               "OWN=$(ls /work/dist/*.whl | head -1 | xargs basename | cut -d- -f1); OWNRE=$(echo $OWN | sed 's/[-_.]/[-_.]/g'); echo OWN_WHEEL=$(ls /work/dist/*.whl | head -1 | xargs basename); "
               f"{deps}PYTHONPATH=/work/.deps PATH=/work/.deps/bin:$PATH python /opt/probe/mcp_probe.py {entry}")
