@@ -46,9 +46,10 @@ if docker exec "$CT" grep -q '공급자 키 없음' /dev/shm/kit-litellm/llm_key
   echo "다음 순서:"
   echo "  1) LLM 공급자 키를 키 저장소에 넣습니다 (그 뒤 키파일은 지웁니다)"
   echo "       sudo docker exec -i $CT kit llm-key < 키파일"
-  echo "  2) 사내 PyPI 미러가 없으면 포털 '외부 접속'에서 pypi.org · files.pythonhosted.org 를 엽니다"
-  echo "  3) 전체 점검"
+  echo "  2) 전체 점검"
   echo "       sudo docker exec $CT kit verify"
+  echo "  3) MCP 가 PyPI 패키지를 쓰면: 사내 미러를 gate.env PYPI_INDEX_URL 에 적거나,"
+  echo "     포털 '외부 접속'에서 pypi.org · files.pythonhosted.org 를 엽니다"
   exit 0
 fi
 docker exec "$CT" kit verify 2>&1 | grep -v '^\[verify-' || true

@@ -188,7 +188,10 @@ def llm_key():
     subprocess.run(["supervisorctl", "-c", str(SERVER / "supervisord.conf"), "restart", "litellm"], check=False)
     time.sleep(3)
     print(Path("/dev/shm/kit-litellm/llm_key_source").read_text().strip())
-    print("이제 gate.env 의 LLM_API_KEY 줄을 지우고 컨테이너를 다시 만드세요.")
+    if os.environ.get("LLM_API_KEY"):   # 옛 방식으로 gate.env 에 평문 키를 적어 둔 서버만
+        print("이제 gate.env 의 LLM_API_KEY 줄을 지우고 컨테이너를 다시 만드세요.")
+    else:
+        print("다음: sudo docker exec mcp-dev-server-kit kit verify")
 
 
 def sso():
