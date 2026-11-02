@@ -16,7 +16,7 @@ def scan(root, use_llm=True):
     with tempfile.TemporaryDirectory() as d:
         out = Path(d) / "report.json"
         env = dict(os.environ, SKILLSPECTOR_PROVIDER="openai", OPENAI_BASE_URL="http://127.0.0.1:4000/v1",
-                   OPENAI_API_KEY=(DATA / "litellm" / "master_key").read_text().strip(), SKILLSPECTOR_MODEL="kit-llm",
+                   OPENAI_API_KEY=Path("/dev/shm/kit/master_key").read_text().strip(), SKILLSPECTOR_MODEL="kit-llm",
                    SKILLSPECTOR_LOG_LEVEL="WARNING")
         cmd = [BIN, "scan", str(root), "--format", "json", "--output", str(out)] + ([] if use_llm else ["--no-llm"])
         p = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=900)

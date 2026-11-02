@@ -131,7 +131,18 @@ def sandbox_run(root, manifest, req_id, artifacts, offline=False):
     install = "pip install --no-cache-dir --disable-pip-version-check -q --target /work/.deps " + source + "/work/build"
     wheel = "pip wheel --no-deps --disable-pip-version-check -q -w /work/dist " + source + "/work/build"
     # /work/src 는 docker cp 로 들어와 root 소유 → 쓰기 가능한 사본에서 빌드
-    script = f"set -e; cp -r /work/src /work/build; {install} 1>&2; {wheel} 1>&2; PYTHONPATH=/work/.deps PATH=/work/.deps/bin:$PATH python /opt/probe/mcp_probe.py {entry}"
+    # rug pull 방지(P16): 설치된 의존성의 정확한 버전(lock)과 그 휠(리눅스·윈도우 × 파이썬 3.11~3.13)을 검사 때 받아 둔다 —
+    # 승인하면 이 휠들만 승인 저장소에 올라가고, 임직원 PC 는 그 저장소만 본다(PyPI 를 보지 않음)
+    deps = "" if offline else (
+        "pip freeze --path /work/.deps | grep -v ' @ ' | grep -vi \"^$OWNRE==\" > /work/dist/lock.txt || true; "
+        "for plat in manylinux2014_x86_64 win_amd64; do for v in 3.11 3.12 3.13; do "
+        f"pip download -q --disable-pip-version-check --no-deps --only-binary=:all: --platform $plat --python-version $v --implementation cp -d /work/dist {source}-r /work/dist/lock.txt 1>&2 "
+        "|| while read -r l; do [ -n \"$l\" ] || continue; "
+        f"pip download -q --disable-pip-version-check --no-deps --only-binary=:all: --platform $plat --python-version $v --implementation cp -d /work/dist {source}\"$l\" 1>&2 "
+        "|| echo \"DEP_MISS $plat $v $l\"; done < /work/dist/lock.txt; done; done; echo DEP_LOCK; cat /work/dist/lock.txt; echo DEP_LOCK_END; ")
+    script = (f"set -e; cp -r /work/src /work/build; {install} 1>&2; {wheel} 1>&2; "
+              "OWN=$(ls /work/dist/*.whl | head -1 | xargs basename | cut -d- -f1); OWNRE=$(echo $OWN | sed 's/[-_.]/[-_.]/g'); echo OWN_WHEEL=$(ls /work/dist/*.whl | head -1 | xargs basename); "
+              f"{deps}PYTHONPATH=/work/.deps PATH=/work/.deps/bin:$PATH python /opt/probe/mcp_probe.py {entry}")
     docker("rm", "-f", name, check=False)
     docker("create", "--name", name, "--network", SANDBOX_NET, "--cpus", "1", "--memory", "768m", "--pids-limit", "256",
            "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
@@ -155,12 +166,25 @@ def sandbox_run(root, manifest, req_id, artifacts, offline=False):
         docker("rm", "-f", name, check=False)
     probe_start = float("inf")   # probe 가 시작 못 했으면 모든 접속은 설치 단계
     result = {"ok": False, "error": "probe 결과 없음", "stderr": stderr[-2000:]}
+    own, lock, misses, in_lock = None, [], [], False
+    for line in stdout.splitlines():
+        if line.startswith("OWN_WHEEL="):
+            own = line.split("=", 1)[1].strip()
+        elif line == "DEP_LOCK":
+            in_lock = True
+        elif line == "DEP_LOCK_END":
+            in_lock = False
+        elif in_lock and "==" in line:
+            lock.append(line.strip())
+        elif line.startswith("DEP_MISS "):
+            misses.append(line[9:].strip())
     for line in stdout.splitlines():
         if line.startswith('{"probe_start"'):
             probe_start = json.loads(line)["probe_start"]
         elif line.startswith("PROBE_RESULT "):
             result = json.loads(line[len("PROBE_RESULT "):])
     result["install_log"] = stderr[-3000:]
+    result.update(own_wheel=own, deps_lock=lock, deps_missing=misses)
     time.sleep(1)
     attempts = proxy_log_since(ip, started) if ip else []
     result["egress_install"] = [a for a in attempts if a["ts"] < probe_start]
@@ -194,6 +218,34 @@ def runtime_findings(root, manifest, run):
                            f"격리 실행 중 이 MCP 가 {a['target']} 로 나가려 했습니다(프록시 결과 {a['result']}). kit-mcp.json 의 egress 에 없는 곳입니다. "
                            "회사 밖으로 데이터를 보내는 코드일 수 있습니다.", rel, line, root,
                            {"kind": "advice", "text": f"필요 없는 접속이면 코드를 지우고, 필요하면 kit-mcp.json 의 \"egress\" 에 \"{host}\" 를 적어 관리자 승인을 받으세요."}))
+    return out
+
+
+# ── 4. 감시자 (P17) ─────────────────────────────────────────────────
+# 관리자가 포털에서 정한 목록(/data/portal/watchers.json). 기본 셋(SkillSpector·osv·격리 실행)은 끌 수 없고 수준만 바꾼다.
+# 수준: 필수 = 막는 심각도(critical·high)가 하나라도 있으면 승인 불가, 감시자가 실패하면 '오류' / 심화 = 결과만 보여 주고 막지 않음.
+# 추가 감시자 = 사내 Docker 이미지: 네트워크 없이 소스를 /src 에 읽기 전용으로 받아 표준 출력에 {"findings":[{severity,title,explain,file,line}]}.
+from watchers_conf import BUILTIN_WATCHERS, load_watchers  # noqa: E402,F401  (포털과 같은 목록 하나)
+
+
+def image_watcher_findings(w, root):
+    # 소스는 docker cp 로 넣는다 — 이 컨테이너 안 경로는 호스트 Docker 가 볼 수 없다(-v 로는 빈 폴더가 붙음)
+    name = f"kit-watch-{w['id']}-{os.getpid()}-{int(time.time())}"
+    docker("create", "--name", name, "--network", "none", "--cpus", "1", "--memory", "1g", "--pids-limit", "256", "--cap-drop", "ALL",
+           "--security-opt", "no-new-privileges", w["image"], *w.get("args", []))
+    try:
+        docker("cp", f"{root}/.", f"{name}:/src")
+        p = docker("start", "-a", name, check=False, timeout=900)
+    finally:
+        docker("rm", "-f", name, check=False)
+    if p.returncode != 0:
+        raise RuntimeError(f"exit {p.returncode}: {(p.stderr or p.stdout)[-500:]}")
+    out = []
+    for f in json.loads(p.stdout).get("findings", []):
+        rel, line = f.get("file"), f.get("line")
+        out.append(finding(w["id"], str(f.get("severity", "medium")).lower(), f.get("title", "(제목 없음)"), f.get("explain", ""),
+                           rel, line if isinstance(line, int) else None, root, {"kind": "advice", "text": f["fix"]} if f.get("fix") else None,
+                           rule=f"{w['id']}:{f.get('rule') or f.get('title')}"))
     return out
 
 
@@ -259,6 +311,9 @@ def run(req, previous=None, log=print):
         manifest = json.loads(mf.read_text())
         result["manifest"] = manifest
         findings = []
+        watchers = load_watchers()
+        level = {w["id"]: w["level"] for w in watchers}
+        result["watchers"] = [{k: w.get(k) for k in ("id", "name", "kind", "level", "image")} for w in watchers]
         ss, ss_report = step("SkillSpector", lambda: skillspector_findings(root))
         findings += ss
         result["skillspector"] = {"risk": ss_report.get("risk_assessment"), "metadata": ss_report.get("metadata"),
@@ -267,18 +322,40 @@ def run(req, previous=None, log=print):
         findings += dep
         artifacts = DATA / "gate" / "artifacts" / req["id"]
         sandbox = step("격리 실행", lambda: sandbox_run(root, manifest, req["id"], artifacts, offline=bool(req.get("path"))))
-        result["wheel"] = next((p.name for p in artifacts.glob("*.whl")), None)
+        result["wheel"] = sandbox.get("own_wheel") or next((p.name for p in artifacts.glob("*.whl")), None)
+        result["deps_lock"], result["deps_missing"] = sandbox.get("deps_lock", []), sandbox.get("deps_missing", [])
+        for m in result["deps_missing"]:   # 그 플랫폼·파이썬에서는 임직원 PC 가 설치하지 못한다
+            plat, ver, dep = m.split(" ", 2)
+            findings.append(finding("deps", "medium", f"휠 없음: {dep} ({'윈도우' if plat.startswith('win') else '리눅스'} · 파이썬 {ver})",
+                                    f"{dep} 은 {plat} · 파이썬 {ver} 용 휠이 없어 승인 저장소에 넣지 못했습니다. 그 환경의 임직원 PC 에서는 설치되지 않습니다.",
+                                    "requirements.txt", None, None, {"kind": "advice", "text": "휠을 제공하는 버전으로 바꾸거나, 그 환경을 쓰지 않는다면 소명해 주세요."}))
         result["sandbox"] = {k: sandbox.get(k) for k in ("ok", "error", "server", "egress_install", "egress_runtime")}
         findings += runtime_findings(root, manifest, sandbox)
+        for w in [w for w in watchers if w["kind"] == "image" and w.get("enabled", True)]:
+            try:
+                findings += step(f"감시자: {w['name']}", lambda w=w: image_watcher_findings(w, root))
+            except Exception as e:
+                if w["level"] == "필수":
+                    raise RuntimeError(f"필수 감시자 '{w['name']}' 실패 — {e}")
+                findings.append(finding(w["id"], "info", f"심화 감시자 실행 실패: {w['name']}", str(e)[-800:]))
+        check_of = {"skillspector": "skillspector", "osv": "osv", "sandbox": "sandbox", "deps": "osv"}
+        for f in findings:   # 항목마다 어느 감시자의 것이고 그 감시자가 필수인지
+            f["watcher"] = check_of.get(f["check"], f["check"])
+            f["level"] = level.get(f["watcher"], "필수")
         tools = sandbox.get("tools", [])
         result["review"] = tool_review(tools, manifest, previous)
+        prev_lock = dict(l.split("==", 1) for l in (previous or {}).get("deps_lock", []))
+        now_lock = dict(l.split("==", 1) for l in result["deps_lock"])
+        result["review"]["deps"] = {"added": sorted(f"{k}=={v}" for k, v in now_lock.items() if k not in prev_lock),
+                                    "removed": sorted(f"{k}=={v}" for k, v in prev_lock.items() if k not in now_lock),
+                                    "changed": sorted(f"{k} {prev_lock[k]} → {v}" for k, v in now_lock.items() if k in prev_lock and prev_lock[k] != v)}
         result["tools"] = tools
         order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
         findings.sort(key=lambda f: (order.get(f["severity"], 5), f["check"]))
         for i, f in enumerate(findings, 1):
             f["id"] = i
         result["findings"] = findings
-        sev = {f["severity"] for f in findings}
+        sev = {f["severity"] for f in findings if f["level"] == "필수"}   # 심화 감시자의 항목은 막지 않는다
         result["verdict"] = "차단" if sev & BLOCKING else ("검토" if findings else "통과")
     except Exception as e:
         result["verdict"] = "오류"

@@ -1,5 +1,5 @@
 # MCP Dev Kit 설치 (윈도우) — 포털 다운로드 페이지가 서버 주소·해시를 채워서 내려준다.
-# 사용: $env:KIT_TOKEN='<개인 키>'; irm {{PUBLIC}}/download/install.ps1 | iex
+# 사용: $env:KIT_TOKEN='<내려받기 코드>'; irm {{PUBLIC}}/download/install.ps1 | iex   (코드는 30분 동안 설치 파일만 받는다 — PC 에 저장하지 않음)
 # 설치되는 것: goose · srt 샌드박스(sandbox-runtime) · mcp-test (실행할 때마다 서버 정책을 받아 srt 안에서 goose 실행)
 # irm | iex 는 사용자 터미널 범위에서 돈다 — 설정이 그 터미널에 남지 않게 블록 안에서 실행
 & {
@@ -12,7 +12,7 @@ $Sha256 = '{{GOOSE_SHA256}}'
 $SrtSha256 = '{{SRT_SHA256}}'
 $MjsSha256 = '{{MJS_SHA256}}'
 $PyShimSha256 = '{{PYSHIM_SHA256}}'
-if (-not $env:KIT_TOKEN) { throw '포털 다운로드 페이지에서 개인 키를 발급받아 $env:KIT_TOKEN 에 넣어 주세요' }
+if (-not $env:KIT_TOKEN) { throw '포털 다운로드 페이지의 설치 명령을 그대로 붙여 넣어 주세요 (내려받기 코드 포함)' }
 
 # 샌드박스(srt)에 필요한 것: Node 22.12 이상 (윈도우는 그 밖에 추가 설치 없음 — 처음 한 번 관리자 준비 단계만)
 $node = Get-Command node -ErrorAction SilentlyContinue
@@ -51,10 +51,10 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Dir 'pyshim') | Out-Null
 Move-Item -Force (Get-KitFile 'sitecustomize.py' $PyShimSha256) (Join-Path $Dir 'pyshim\sitecustomize.py')
 $SrtCli = Join-Path $Dir 'srt-bundle\node_modules\@anthropic-ai\sandbox-runtime\dist\cli.js'
 # srt 는 명령을 별도 사용자(srt-sandbox)로 실행한다 — 개인 폴더(AppData)에 둔 srt·goose 를 그 사용자가 읽고 실행할 수 있게
-# (Users 읽기·실행만 · 개인 키 파일 token 은 그대로 본인만)
+# (Users 읽기·실행만)
 foreach ($sub in 'srt-bundle', 'pyshim', (Split-Path -Leaf $Goose.DirectoryName)) { icacls (Join-Path $Dir $sub) /grant '*S-1-5-32-545:(OI)(CI)RX' /T /Q | Out-Null }
 
-Set-Content -NoNewline -Path (Join-Path $Dir 'token') -Value $env:KIT_TOKEN
+Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Dir 'token')   # 예전 판의 개인 키 파일 — 이제 PC 에 키를 두지 않는다
 $CaPem = @'
 {{CA_PEM}}
 '@

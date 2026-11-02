@@ -15,6 +15,11 @@
     <p class="kicker">샌드박스</p><h2>지금 정책</h2>
     <label>샌드박스</label><select id="sandbox"><option value="required">srt 샌드박스 필수 (작업 폴더 밖 홈 읽기·쓰기 막음)</option><option value="off">끔</option></select>
     <label><input type="checkbox" id="cmode"> 리눅스 컨테이너 개발환경 모드 (도커·WSL 안에서 개발할 때만 — srt 약한 모드, 유닉스 소켓 차단 빠짐)</label>
+    <label><input type="checkbox" id="hitl"> 사람 승인 강제 — 대화형은 늘 매번 묻기, run 은 툴 호출 없음 (개발자가 끌 수 없음)</label>
+    <label>MCP 비밀값 출처 (kit-mcp.json 의 secrets 이름을 이 순서로 찾음)</label>
+    <label><input type="checkbox" id="src-kms"> 키 중앙관리 (사내 Git 비밀값)</label>
+    <label><input type="checkbox" id="src-keyring"> PC 의 OS 암호화 저장소 (윈도우 자격 증명 관리자 · 리눅스 keyring)</label>
+    <label><input type="checkbox" id="src-env"> PC 환경 변수 (하 — 최소 기준)</label>
     <label>대화형 mcp-test 의 툴 호출</label><select id="m-session"><option value="approve">매번 묻기 (approve)</option><option value="smart_approve">민감한 것만 묻기</option><option value="auto">묻지 않음</option><option value="chat">툴 호출 안 함</option></select>
     <label>mcp-test run 의 툴 호출</label><select id="m-run"><option value="auto">묻지 않음 (물을 화면이 없음)</option><option value="chat">툴 호출 안 함</option></select>
     <label>개발자 PC 에서 바깥으로 열 곳 (사내 서버 <b class="mono" id="kit"></b> 는 늘 열림)</label>
@@ -32,7 +37,8 @@ let P;
 async function api(path, opt) { const r = await fetch(path, opt); const b = await r.json().catch(() => ({})); if (!r.ok) throw new Error(b.detail || r.statusText); return b; }
 function paint() {
   $("title").textContent = `v${P.version} · 샌드박스 ${P.sandbox === "required" ? "필수" : "끔"}`;
-  $("sandbox").value = P.sandbox; $("m-session").value = P.goose_mode.session; $("m-run").value = P.goose_mode.run; $("cmode").checked = !!P.linux_container_mode; $("kit").textContent = P.kit_host;
+  $("sandbox").value = P.sandbox; $("m-session").value = P.goose_mode.session; $("m-run").value = P.goose_mode.run; $("cmode").checked = !!P.linux_container_mode; $("hitl").checked = !!P.hitl_required;
+  for (const k of ["kms", "keyring", "env"]) $("src-" + k).checked = (P.secret_sources || []).includes(k); $("kit").textContent = P.kit_host;
   $("doms").innerHTML = P.allowed_domains.map((d, i) => `<tr><td class="mono">${esc(d)}</td><td><button class="btn line sm" data-del="${i}">삭제</button></td></tr>`).join("") || '<tr><td colspan="2" class="dim">없음 — 사내 서버만 열림</td></tr>';
   $("saved").textContent = P.by ? `마지막 변경 ${esc(P.by)} · ${when(P.at)}` : "";
 }
@@ -40,7 +46,7 @@ $("doms").onclick = ev => { const b = ev.target.closest("[data-del]"); if (b) { 
 $("add").onsubmit = ev => { ev.preventDefault(); const d = $("dom").value.trim(); if (d) { P.allowed_domains.push(d); $("dom").value = ""; paint(); } };
 $("save").onclick = async () => { $("err").textContent = "";
   try { P = await api("/api/devpolicy", {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({sandbox: $("sandbox").value,
-    allowed_domains: P.allowed_domains, goose_mode_session: $("m-session").value, goose_mode_run: $("m-run").value, linux_container_mode: $("cmode").checked, expected_version: P.version})}); paint(); }
+    allowed_domains: P.allowed_domains, goose_mode_session: $("m-session").value, goose_mode_run: $("m-run").value, linux_container_mode: $("cmode").checked, hitl_required: $("hitl").checked, secret_sources: ["kms", "keyring", "env"].filter(k => $("src-" + k).checked), expected_version: P.version})}); paint(); }
   catch (e) { $("err").textContent = e.message; } };
 document.addEventListener("kit-me", async e => { P = await api("/api/devpolicy"); paint();
   if (!e.detail?.is_super) { for (const id of ["sandbox", "m-session", "m-run", "dom", "cmode"]) $(id).disabled = true; $("save").hidden = true; $("add").hidden = true;

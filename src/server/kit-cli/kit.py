@@ -100,7 +100,7 @@ def egress():
 
 
 def llm_tool_calling():
-    key = (DATA / "litellm" / "master_key").read_text().strip()
+    key = Path("/dev/shm/kit/master_key").read_text().strip()
     body = {"model": "kit-llm", "temperature": 0, "messages": [{"role": "user", "content": "What is the weather in Seoul? Use the tool."}],
             "tools": [{"type": "function", "function": {"name": "get_weather", "description": "Get weather for a city",
                                                         "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}]}
@@ -137,8 +137,37 @@ def samples():
     return " · ".join(out)
 
 
+def key_store():
+    """P7: 디스크에 평문 키가 없고, 공급자 키를 키 저장소에서 꺼냈는가."""
+    src = Path("/dev/shm/kit-litellm/llm_key_source").read_text().strip()
+    if Path("/data/litellm/master_key").exists():
+        raise RuntimeError("디스크에 예전 평문 마스터 키(/data/litellm/master_key)가 남아 있습니다")
+    if "키 저장소" not in src:
+        raise RuntimeError(src)
+    return src + " · 마스터 키는 메모리(/dev/shm)에만"
+
+
+def llm_key():
+    """공급자 키를 표준 입력으로 받아 키 저장소(키트 관리자 계정의 Gitea 시크릿 KIT_LLM_API_KEY)에 넣고 LiteLLM 을 다시 띄운다."""
+    import base64
+    import urllib.request
+    key = sys.stdin.readline().strip()
+    if not key:
+        sys.exit("표준 입력으로 키를 넣어 주세요 (예: docker exec -i <컨테이너> kit llm-key < 키파일)")
+    user, pw = os.environ.get("KIT_ADMIN_USER", "kitadmin"), os.environ["PORTAL_ADMIN_PASSWORD"]
+    req = urllib.request.Request("http://127.0.0.1:3000/api/v1/user/actions/secrets/KIT_LLM_API_KEY", method="PUT",
+                                 data=json.dumps({"data": key}).encode(),
+                                 headers={"Content-Type": "application/json", "Authorization": "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        print("키 저장소에 넣었습니다:", r.status)
+    subprocess.run(["supervisorctl", "-c", str(SERVER / "supervisord.conf"), "restart", "litellm"], check=False)
+    time.sleep(3)
+    print(Path("/dev/shm/kit-litellm/llm_key_source").read_text().strip())
+    print("이제 gate.env 의 LLM_API_KEY 줄을 지우고 컨테이너를 다시 만드세요.")
+
+
 def verify():
-    results = [check("서비스", services), check("외부 접속 통제", egress), check("LLM tool calling", llm_tool_calling),
+    results = [check("서비스", services), check("키 저장소 (디스크에 평문 키 없음)", key_store), check("외부 접속 통제", egress), check("LLM tool calling", llm_tool_calling),
                check("osv.dev 접속", osv_reach), check("good 샘플 통과 · bad 샘플 차단", samples)]
     print("전 항목 OK" if all(results) else f"실패 {results.count(False)}건")
     return 0 if all(results) else 1
@@ -150,6 +179,8 @@ def main():
         print(INIT, end="")
     elif cmd == "verify":
         sys.exit(verify())
+    elif cmd == "llm-key":
+        llm_key()
     elif cmd == "mail-template":
         mail_template()
     elif cmd == "access-reset":

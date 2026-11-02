@@ -56,13 +56,13 @@ def public_key_pem():
 
 def managed_mcp(registry):
     public = os.environ["KIT_PUBLIC_URL"].rstrip("/")
-    default_index = os.environ.get("PYPI_INDEX_URL") or "https://pypi.org/simple"
     servers = {}
     for name, e in sorted(registry.items()):
         if e["status"] != "approved":
             continue
         servers[name] = {"type": "stdio", "command": "uvx",
-                         "args": ["--index", f"{public}/approved/simple", "--default-index", default_index,
+                         # rug pull 방지(P16): 의존성까지 검사 때 받은 그 휠만 — PyPI 를 보지 않으니 승인 뒤 새 버전이 끼어들 수 없다
+                         "args": ["--default-index", f"{public}/approved/simple",
                                   "--from", f"{e['package']}=={e['version']}", e["entry"]],
                          # uv 는 기본으로 내장 루트 인증서만 본다 → 사내 CA(OS 저장소)를 쓰게
                          "env": {"UV_NATIVE_TLS": "true"}}
@@ -86,22 +86,37 @@ def _history(action, name, who, **extra):
         f.write(json.dumps({"ts": time.time(), "action": action, "name": name, "who": who, **extra}, ensure_ascii=False) + "\n")
 
 
-def approve(req, who):
+def approve(req, who, identity=None):
     res = req["result"]
-    wheel = DATA / "gate" / "artifacts" / req["id"] / res["wheel"]
+    art = DATA / "gate" / "artifacts" / req["id"]
+    wheel = art / res["wheel"]
     package, version = res["wheel"].split("-")[0], res["wheel"].split("-")[1]
-    dest = APPROVED / norm(package)
-    dest.mkdir(parents=True, exist_ok=True)
-    target = dest / res["wheel"]
-    digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
-    if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() != digest:
-        raise ValueError(f"{res['wheel']} 은 이미 다른 내용으로 승인돼 있습니다. 버전을 올려 다시 요청해 주세요.")
-    shutil.copy(wheel, target)
+    owner = req["repo"].split("/", 1)[0]
     registry = load()
+    for other, e in registry.items():   # 개발자 사이 침해 방지(P15): 남의 패키지 이름으로 휠을 올리지 못한다
+        if e.get("package") == norm(package) and other != req["name"] and e["repo"].split("/", 1)[0] != owner:
+            raise ValueError(f"패키지 이름 {norm(package)} 은 {e['repo']} 의 것입니다. pyproject 의 name 을 바꿔 주세요.")
+    # 검사 때 받은 휠 전부(이 MCP + 의존성 — 리눅스·윈도우) — 같은 파일 이름이 다른 내용이면 거부
+    wheels = sorted(art.glob("*.whl"))
+    lock = []
+    for w in wheels:
+        dest = APPROVED / norm(w.name.split("-")[0])
+        digest = hashlib.sha256(w.read_bytes()).hexdigest()
+        target = dest / w.name
+        if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+            raise ValueError(f"{w.name} 은 이미 다른 내용으로 승인돼 있습니다. 버전을 올려 다시 요청해 주세요.")
+        lock.append({"file": w.name, "sha256": digest})
+    for w in wheels:
+        dest = APPROVED / norm(w.name.split("-")[0])
+        dest.mkdir(parents=True, exist_ok=True)
+        if not (dest / w.name).exists():
+            shutil.copy(w, dest / w.name)
+    digest = next(x["sha256"] for x in lock if x["file"] == res["wheel"])
     registry[req["name"]] = {"status": "approved", "package": norm(package), "version": version, "entry": res["manifest"]["entry"],
                              "repo": req["repo"], "commit": res["commit"], "wheel": res["wheel"], "sha256": digest,
                              "tools": [{"name": t["name"], "description": t.get("description", "")} for t in res.get("tools", [])],
                              "egress": res["manifest"].get("egress", []), "request_id": req["id"],
+                             "publisher": identity or {"login": owner}, "lock": lock, "deps_lock": res.get("deps_lock", []),
                              "approved_by": who, "approved_at": time.time()}
     _write(REGISTRY, json.dumps(registry, ensure_ascii=False, indent=1))
     regenerate(registry)
@@ -152,8 +167,11 @@ def marketplace_files(registry):
             continue
         desc = "; ".join(t["name"] for t in e.get("tools", []))
         plugins.append({"name": name, "source": f"./plugins/{name}", "description": f"사내 승인 MCP — 툴: {desc}"})
+        pub = e.get("publisher") or {}
         files[f"plugins/{name}/.claude-plugin/plugin.json"] = {"name": name, "version": e["version"],
-                                                                "description": f"사내 승인 MCP ({e['repo']}@{e['commit'][:10]})"}
+                                                                "description": f"사내 승인 MCP ({e['repo']}@{e['commit'][:10]})",
+                                                                "author": {k: v for k, v in (("name", pub.get("name") or pub.get("login", "")),
+                                                                                             ("email", pub.get("email", ""))) if v}}
         files[f"plugins/{name}/.mcp.json"] = {"mcpServers": {name: servers[name]}}
     market = {"name": MARKET_NAME, "description": "MCP Dev Kit 에서 검사·승인된 MCP", "owner": {"name": "MCP Dev Kit"},
               "plugins": plugins, "forceRemoveDeletedPlugins": True}

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>자산 현황 — MCP Dev Kit</title>
+<link rel="stylesheet" href="/static/kit.css">
+<style>select,input.w { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 13px }
+.pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; background:#eef2f7 }
+.s-배포 { background:#e3f5e9 } .s-탈락,.s-회수 { background:#fde8e8 } .s-검사,.s-승인 { background:#fff4e0 }</style>
+</head>
+<body>
+<header class="top"><span class="brand">MCP Dev Kit</span><nav class="nav" id="nav" data-on="/admin/assets"></nav></header>
+<section class="hero"><span class="tag">자산 현황</span><h1 id="title">…</h1><p>누가 어떤 MCP 를 개발 중인지 · 탈락과 사유 · 배포 중인 버전 · 이력</p></section>
+<main>
+  <section class="card"><p class="kicker">단계</p><h2 id="counts"></h2>
+    <form class="inline" id="flt"><select id="who"><option value="">모든 개발자</option></select> <select id="st"><option value="">모든 단계</option></select></form>
+    <div class="scroll"><table><thead><tr><th>MCP · 저장소</th><th>게시자</th><th>단계</th><th>까닭 · 이력</th><th>마지막 활동</th></tr></thead><tbody id="rows"></tbody></table></div>
+  </section>
+  <section class="card"><p class="kicker">사람별</p><h2>개발자</h2>
+    <div class="scroll"><table><thead><tr><th>개발자</th><th>이메일</th><th id="ph"></th></tr></thead><tbody id="people"></tbody></table></div>
+  </section>
+  <div class="err" id="err"></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const when = ts => ts ? new Date((typeof ts === "number" ? ts * 1000 : ts)).toLocaleString("ko-KR", {hour12: false}) : "";
+async function api(path, opt) { const r = await fetch(path, opt); const b = await r.json().catch(() => ({})); if (!r.ok) throw new Error(b.detail || r.statusText); return b; }
+const put = (path, body) => api(path, {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+let A;
+function paint() {
+  const who = $("who").value, st = $("st").value;
+  const rows = A.rows.filter(r => (!who || r.owner === who) && (!st || r.stage === st));
+  $("title").textContent = `MCP ${A.rows.length}개 · 개발자 ${A.people.length}명`;
+  $("counts").textContent = A.stages.map(s => `${s} ${A.counts[s]}`).join(" · ");
+  $("rows").innerHTML = rows.map(r => `<tr><td><b>${esc(r.name)}</b><br><a class="dim mono" href="/git/${esc(r.repo)}">${esc(r.repo)}</a></td>
+    <td>${esc(r.owner_name || r.owner)}<br><span class="dim">${esc(r.owner_email || "(이메일 없음)")}</span></td>
+    <td><span class="pill s-${esc(r.stage.split(" ")[0])}">${esc(r.stage)}</span></td>
+    <td>${esc(r.why)}<details><summary class="dim">이력 ${r.history.length}</summary>${r.history.map(h => `<div class="dim">${when(h.ts)} · ${esc(h.what)}</div>`).join("") || '<div class="dim">없음</div>'}</details></td>
+    <td class="dim">${when(r.last_activity) || when(r.updated)}</td></tr>`).join("") || '<tr><td colspan="5" class="dim">없음</td></tr>';
+  $("ph").textContent = A.stages.join(" · ");
+  $("people").innerHTML = A.people.map(p => `<tr><td><a href="#" data-who="${esc(p.login)}"><b>${esc(p.name || p.login)}</b></a> <span class="dim mono">${esc(p.login)}</span></td><td>${esc(p.email)}</td>
+    <td class="mono">${A.stages.map(s => p[s]).join(" · ")}</td></tr>`).join("");
+}
+$("people").onclick = ev => { const a = ev.target.closest("[data-who]"); if (a) { ev.preventDefault(); $("who").value = a.dataset.who; paint(); scrollTo(0, 0); } };
+$("flt").onchange = paint;
+api("/api/assets").then(a => { A = a;
+  $("who").innerHTML += a.people.map(p => `<option value="${esc(p.login)}">${esc(p.name || p.login)} (${esc(p.login)})</option>`).join("");
+  $("st").innerHTML += a.stages.map(s => `<option>${s}</option>`).join(""); paint(); }).catch(e => $("err").textContent = e.message);
+</script>
+<script src="/static/nav.js"></script>
+</body>
+</html>

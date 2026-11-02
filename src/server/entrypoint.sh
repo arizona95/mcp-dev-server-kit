@@ -5,10 +5,15 @@ set -e
 if [ "${1:-}" = "init" ] || [ "${1:-}" = "mail-template" ]; then exec /opt/kit/server/kit-cli/kit "$@"; fi
 : "${PORTAL_ADMIN_PASSWORD:?gate.env 에 PORTAL_ADMIN_PASSWORD 가 필요합니다}"
 : "${LLM_MODEL:?gate.env 에 LLM_MODEL 이 필요합니다 (예: anthropic/claude-haiku-4-5, openai/<모델>)}"
-: "${LLM_API_KEY:?gate.env 에 LLM_API_KEY 가 필요합니다}"
+# 공급자 키(LLM_API_KEY)는 키 저장소(Gitea 시크릿 KIT_LLM_API_KEY — `kit llm-key`)에 둔다. gate.env 에 남아 있으면 그것을 쓰되 경고한다.
 : "${KIT_PUBLIC_URL:?gate.env 에 KIT_PUBLIC_URL 이 필요합니다 (예: https://mcp.사내도메인)}"
 # 재시작이면 지난번 PID 파일이 남아 있다
-rm -f /run/squid.pid /run/supervisord.pid /run/kit-egress.sock
+rm -f /run/squid.pid /run/supervisord.pid /run/kit-egress.sock /run/kit-secrets.sock
+# 메모리에만 두는 키(P7): /dev/shm(tmpfs) — 디스크에 평문 키를 남기지 않는다. LiteLLM 마스터 키는 시작할 때마다 새로.
+mkdir -p /dev/shm/kit && chown root:kit /dev/shm/kit && chmod 750 /dev/shm/kit && mkdir -p /dev/shm/kit-litellm && chown kit:kit /dev/shm/kit-litellm && chmod 750 /dev/shm/kit-litellm
+( umask 027; /opt/kit/venv/bin/python -c "import secrets; print('sk-kit-' + secrets.token_urlsafe(32))" > /dev/shm/kit/master_key )
+chown root:kit /dev/shm/kit/master_key && chmod 640 /dev/shm/kit/master_key
+rm -f /data/litellm/master_key   # 예전 판이 디스크에 남긴 평문 키
 mkdir -p /data/egress /data/logs
 touch /data/egress/access.log /data/egress/changes.jsonl
 [ -f /data/egress/extra.json ] || echo '[]' > /data/egress/extra.json
@@ -19,7 +24,7 @@ chown root:kit /data/egress && chmod 775 /data/egress
 /opt/kit/venv/bin/python /opt/kit/server/litellm/render_config.py
 chown -R kit:kit /data/litellm
 umask 077
-sed "s|__LITELLM_MASTER_KEY__|$(cat /data/litellm/master_key)|" /opt/kit/server/front/nginx.conf > /run/kit-nginx.conf
+sed "s|__LITELLM_MASTER_KEY__|$(cat /dev/shm/kit/master_key)|" /opt/kit/server/front/nginx.conf > /dev/shm/kit/nginx.conf
 umask 022
 /opt/kit/venv/bin/python /opt/kit/server/egress-proxy/egress.py access-render
 # 인증서가 있으면 443 TLS, 없으면 8080 평문(개발용)

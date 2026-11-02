@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM 차단 패턴 — MCP Dev Kit</title>
+<link rel="stylesheet" href="/static/kit.css">
+<style>select,input.w { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 13px }
+.pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; background:#eef2f7 }
+.s-배포 { background:#e3f5e9 } .s-탈락,.s-회수 { background:#fde8e8 } .s-검사,.s-승인 { background:#fff4e0 }</style>
+</head>
+<body>
+<header class="top"><span class="brand">MCP Dev Kit</span><nav class="nav" id="nav" data-on="/admin/dlp"></nav></header>
+<section class="hero"><span class="tag">LLM 게이트웨이</span><h1 id="title">…</h1><p>개발자가 LLM 에 보내는 질의에 이 모양의 값이 있으면 막습니다 (값은 기록하지 않음)</p></section>
+<main>
+  <section class="card"><p class="kicker">정규식</p><h2>차단 패턴</h2>
+    <div class="scroll"><table><thead><tr><th>켬</th><th>id</th><th>이름</th><th>정규식</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+    <form class="inline" id="add"><input class="w" id="nid" placeholder="id"> <input class="w" id="nname" placeholder="이름"> <input class="w mono" id="nrx" placeholder="정규식"> <button class="btn line">추가</button></form>
+    <p><button class="btn" id="save">저장</button> <span class="dim" id="saved"></span></p>
+    <div class="err" id="err"></div>
+  </section>
+  <section class="card"><p class="kicker">기록</p><h2>막은 질의</h2>
+    <div class="scroll"><table><thead><tr><th>시각</th><th>개발자</th><th>패턴</th></tr></thead><tbody id="log"></tbody></table></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const when = ts => ts ? new Date((typeof ts === "number" ? ts * 1000 : ts)).toLocaleString("ko-KR", {hour12: false}) : "";
+async function api(path, opt) { const r = await fetch(path, opt); const b = await r.json().catch(() => ({})); if (!r.ok) throw new Error(b.detail || r.statusText); return b; }
+const put = (path, body) => api(path, {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+let D;
+function paint() {
+  $("title").textContent = `패턴 ${D.patterns.length}개 · 켬 ${D.patterns.filter(p => p.enabled).length}`;
+  $("rows").innerHTML = D.patterns.map((p, i) => `<tr><td><input type="checkbox" data-on="${i}"${p.enabled ? " checked" : ""}></td><td class="mono">${esc(p.id)}</td>
+    <td><input class="w" data-name="${i}" value="${esc(p.name)}"></td><td><input class="w mono" data-rx="${i}" value="${esc(p.regex)}" style="width:28em"></td>
+    <td><button class="btn line sm" data-del="${i}">삭제</button></td></tr>`).join("");
+  $("saved").textContent = `v${D.version}` + (D.by ? ` · 마지막 변경 ${esc(D.by)} · ${when(D.at)}` : "");
+  $("log").innerHTML = D.log.map(l => `<tr><td class="dim">${when(l.ts)}</td><td>${esc(l.user)}</td><td>${esc(l.name)} <span class="dim mono">${esc(l.pattern)}</span></td></tr>`).join("") || '<tr><td colspan="3" class="dim">없음</td></tr>';
+}
+$("rows").onchange = ev => { const t = ev.target;
+  if (t.dataset.on) D.patterns[+t.dataset.on].enabled = t.checked;
+  if (t.dataset.name) D.patterns[+t.dataset.name].name = t.value;
+  if (t.dataset.rx) D.patterns[+t.dataset.rx].regex = t.value; };
+$("rows").onclick = ev => { const b = ev.target.closest("[data-del]"); if (b) { D.patterns.splice(+b.dataset.del, 1); paint(); } };
+$("add").onsubmit = ev => { ev.preventDefault(); D.patterns.push({id: $("nid").value.trim(), name: $("nname").value.trim(), regex: $("nrx").value, enabled: true}); ["nid", "nname", "nrx"].forEach(i => $(i).value = ""); paint(); };
+$("save").onclick = async () => { $("err").textContent = ""; try { D = await put("/api/dlp", {patterns: D.patterns, expected_version: D.version}); paint(); $("saved").textContent += " — 저장했습니다. 다음 질의부터 적용"; } catch (e) { $("err").textContent = e.message; } };
+api("/api/dlp").then(d => { D = d; paint(); }).catch(e => $("err").textContent = e.message);
+</script>
+<script src="/static/nav.js"></script>
+</body>
+</html>

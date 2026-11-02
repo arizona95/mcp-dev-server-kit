@@ -47,7 +47,8 @@ class LoginRequired(Exception):
 def to_login(request: Request, _):
     if request.url.path.startswith("/api/"):
         return JSONResponse({"detail": "로그인이 필요합니다"}, status_code=401)
-    return RedirectResponse("/login?next=" + urllib.parse.quote(request.url.path))
+    nxt = request.url.path + (("?" + request.url.query) if request.url.query else "")
+    return RedirectResponse("/login?next=" + urllib.parse.quote(nxt))
 
 
 ROLES = DATA / "portal" / "roles.json"
@@ -123,7 +124,9 @@ def callback(request: Request, code: str, state: str):
     with urllib.request.urlopen(urllib.request.Request(f"{GITEA}/api/v1/user",
                                                        headers={"Authorization": f"Bearer {token}"}), timeout=10) as r:
         me = json.loads(r.read())
-    request.session["user"] = {"login": me["login"], "gitea_admin": bool(me.get("is_admin"))}
+    # 게시자 신원(P18): Gitea(= SSO 를 붙이면 회사 계정)의 이름·이메일을 함께 둔다
+    request.session["user"] = {"login": me["login"], "gitea_admin": bool(me.get("is_admin")),
+                               "email": me.get("email", ""), "full_name": me.get("full_name", "")}
     event("login", me["login"], admin=bool(me.get("is_admin")))
     return RedirectResponse(request.session.pop("next", "/"))
 
@@ -261,31 +264,78 @@ def token_hash(t):
     return hashlib.sha256(t.encode()).hexdigest()
 
 
-def token_user(request: Request):
+def token_user(request: Request, kind=("run",)):
     """Authorization: Bearer <개인 키> → 로그인 이름. 없거나 틀리면 None."""
     auth = request.headers.get("authorization", "")
     if not auth.lower().startswith("bearer "):
         return None
     entry = load_tokens().get(token_hash(auth[7:].strip()))
-    return entry["login"] if entry else None
+    if not entry or entry.get("exp", float("inf")) < __import__("time").time():
+        return None
+    if kind and entry.get("kind", "run") not in kind:
+        return None
+    return entry["login"]
 
 
-@app.post("/api/token")
-def issue_token(u=Depends(user)):
-    """개인 키 새로 발급 — 예전 키는 바로 못 쓰게 된다. 값은 이번 응답에서만 보인다."""
-    tokens = {h: e for h, e in load_tokens().items() if e["login"] != u["login"]}
-    t = "kit-" + secrets.token_urlsafe(32)
-    tokens[token_hash(t)] = {"login": u["login"], "created": __import__("time").time()}
-    TOKENS.write_text(json.dumps(tokens))
-    TOKENS.chmod(0o600)
-    event("token", u["login"])
-    return {"token": t}
+# 개인 PC 에 키를 저장하지 않는다(P7): 오래 쓰는 개인 키 대신 ① 설치용 내려받기 코드(30분, 파일 내려받기만)
+# ② 실행 토큰(mcp-test 가 실행마다 브라우저 로그인으로 받음, 1시간, 메모리에만). 서버는 해시만 둔다.
+RUN_TTL = int(os.environ.get("KIT_RUN_TOKEN_TTL", "3600"))
+DL_TTL = 1800
+
+
+def mint(login, kind, ttl, **extra):
+    import time as _t
+    now = _t.time()
+    tokens = {h: e for h, e in load_tokens().items() if e.get("exp", 0) > now}   # 지난 것은 정리
+    t = ("kitrun-" if kind == "run" else "kitdl-") + secrets.token_urlsafe(32)
+    tokens[token_hash(t)] = {"login": login, "kind": kind, "created": now, "exp": now + ttl, **extra}
+    tmp = TOKENS.with_suffix(".tmp")
+    tmp.write_text(json.dumps(tokens))
+    tmp.chmod(0o600)
+    tmp.replace(TOKENS)
+    return t
+
+
+@app.post("/api/dlcode")
+def issue_dlcode(u=Depends(user)):
+    """설치 명령에 붙일 내려받기 코드 — 30분 동안 설치 파일만 받는다(LLM·정책·비밀값에는 못 씀). PC 에 저장되지 않는다."""
+    event("dlcode", u["login"])
+    return {"code": mint(u["login"], "download", DL_TTL), "ttl": DL_TTL}
+
+
+@app.get("/cli/login")
+def cli_login(port: int, state: str, u=Depends(user)):
+    """mcp-test 가 여는 브라우저 로그인 — 실행 토큰을 만들어 PC 의 127.0.0.1:<port> 로 돌려준다(그 프로세스 메모리에만)."""
+    if not 1024 <= port <= 65535 or not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", state):
+        raise HTTPException(400, "잘못된 요청")
+    t = mint(u["login"], "run", RUN_TTL, ip=u["ip"])
+    event("run_token", u["login"], ip=u["ip"])
+    return RedirectResponse(f"http://127.0.0.1:{port}/cb?" + urllib.parse.urlencode({"state": state, "token": t}))
+
+
+class TokenRevoke(BaseModel):
+    login: str = ""
+    reason: str = ""
+
+
+@app.post("/api/tokens/revoke")
+def revoke_tokens(body: TokenRevoke, u=Depends(user)):
+    """즉시 중단(kill switch): 그 사람의 실행 토큰·내려받기 코드를 모두 지운다 → 다음 LLM·정책·비밀값 요청부터 거부."""
+    login = body.login or u["login"]
+    if login != u["login"] and not u["is_admin"]:
+        raise HTTPException(403)
+    tokens = load_tokens()
+    left = {h: e for h, e in tokens.items() if e["login"] != login}
+    TOKENS.write_text(json.dumps(left))
+    event("token_revoke", u["login"], target=login, n=len(tokens) - len(left), reason=body.reason)
+    return {"revoked": len(tokens) - len(left)}
 
 
 @app.get("/api/token")
 def token_info(u=Depends(user)):
-    mine = [e for e in load_tokens().values() if e["login"] == u["login"]]
-    return {"has_token": bool(mine), "created": mine[0]["created"] if mine else None}
+    import time as _t
+    mine = [e for e in load_tokens().values() if e["login"] == u["login"] and e.get("exp", 0) > _t.time()]
+    return {"active": len([e for e in mine if e.get("kind") == "run"]), "ttl": RUN_TTL}
 
 
 @app.get("/_auth/llm")
@@ -328,7 +378,7 @@ def install_ps1():
 @app.get("/download/files/{name}")
 def download_file(name: str, request: Request):
     """goose 파일 — 로그인 세션이나 개인 키가 있어야 받는다."""
-    if not (request.session.get("user") or token_user(request)):
+    if not (request.session.get("user") or token_user(request, kind=("download", "run"))):
         raise HTTPException(401, "로그인하거나 개인 키를 붙여 주세요")
     for os_name, (file, _) in goose_files().items():
         if name == file:
@@ -407,10 +457,14 @@ def new_request(body: NewRequest, u=Depends(user)):
     except Exception:
         raise HTTPException(400, f"{body.repo}@{body.ref} 최상위에 kit-mcp.json 이 없습니다")
     import time as _t
+    name = manifest.get("name", body.repo.split("/")[-1])
+    owner_of = publisher.load().get(name, {}).get("repo", "").split("/", 1)[0]
+    if owner_of and owner_of != owner:   # 개발자 사이 침해 방지(P15): 남이 배포한 이름으로 올려 덮어쓰지 못한다
+        raise HTTPException(403, f"'{name}' 은 {owner_of} 의 MCP 이름입니다. kit-mcp.json 의 name 을 바꿔 주세요")
     rid = _t.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3)
     REQUESTS.mkdir(parents=True, exist_ok=True)
-    req = {"id": rid, "repo": body.repo, "ref": body.ref, "name": manifest.get("name", body.repo.split("/")[-1]),
-           "submitter": u["login"], "created": _t.time(), "status": "queued", "decision": "pending"}
+    req = {"id": rid, "repo": body.repo, "ref": body.ref, "name": name,
+           "submitter": u["login"], "submitter_name": u.get("full_name", ""), "submitter_email": u.get("email", ""), "created": _t.time(), "status": "queued", "decision": "pending"}
     save_request(req)
     event("request", u["login"], request=rid, repo=body.repo)
     return req
@@ -451,11 +505,14 @@ def decide(rid: str, d: Decision, who=Depends(admin)):
     if r["status"] != "done":
         raise HTTPException(409, "검사가 끝나지 않았습니다")
     verdict = effective_verdict(r.get("result") or {})
+    if d.action == "approve" and r["submitter"] == who:   # P5: 만든 사람과 승인하는 사람을 나눈다
+        raise HTTPException(403, "자기가 올린 MCP 는 다른 관리자가 승인해야 합니다")
     if d.action == "approve":
         if verdict in ("차단", "오류"):
             raise HTTPException(409, f"검사 결과가 '{verdict}' 이라 승인할 수 없습니다 (막는 항목의 소명이 모두 허용되면 승인할 수 있습니다)")
         try:
-            publisher.approve(r, who)
+            publisher.approve(r, who, identity={"login": r["submitter"], "name": r.get("submitter_name", ""),
+                                                "email": r.get("submitter_email", "")})
         except ValueError as e:
             raise HTTPException(409, str(e))
         r["decision"] = "approved"
@@ -568,7 +625,7 @@ def effective_verdict(res):
     if res.get("verdict") == "오류":
         return "오류"
     live = [f for f in res.get("findings", []) if (f.get("appeal") or {}).get("status") != "accepted"]
-    if any(f["severity"] in BLOCKING for f in live):
+    if any(f["severity"] in BLOCKING and f.get("level", "필수") == "필수" for f in live):   # 심화 감시자 항목은 막지 않음
         return "차단"
     return "검토" if live else "통과"
 
@@ -608,6 +665,8 @@ def appeal(rid: str, fid: int, body: Appeal, u=Depends(user)):
 @app.post("/api/requests/{rid}/findings/{fid}/appeal/decision")
 def appeal_decision(rid: str, fid: int, body: AppealDecision, who=Depends(admin)):
     r = load_request(rid)
+    if r["submitter"] == who:   # P5: 자기 소명을 자기가 허용하지 못한다
+        raise HTTPException(403, "자기 소명은 다른 관리자가 판단해야 합니다")
     f = _finding(r, fid)
     if not f.get("appeal"):
         raise HTTPException(409, "소명이 없습니다")
@@ -957,7 +1016,12 @@ def users_page(_=Depends(superadmin)):
 DEVPOLICY = DATA / "portal" / "devpolicy.json"
 DEVPOLICY_DEFAULT = {"version": 1, "sandbox": "required", "allowed_domains": [],
                      "goose_mode": {"session": "approve", "run": "auto"}, "workspace_only": True,
-                     "linux_container_mode": False}   # True = 도커·WSL 같은 컨테이너 개발환경용 srt 약한 모드 (유닉스 소켓 차단 빠짐)
+                     "linux_container_mode": False,   # True = 도커·WSL 같은 컨테이너 개발환경용 srt 약한 모드 (유닉스 소켓 차단 빠짐)
+                     # P4: 사람 승인 강제 — 대화형은 늘 매번 묻기, 물을 화면이 없는 run 은 툴 호출 없는 chat 만. 개발자가 끌 수 없다.
+                     "hitl_required": True,
+                     # P21: MCP 비밀값을 어디서 꺼내 줄지 — kms(키 중앙관리·상) · keyring(PC 의 OS 암호화 저장소·상) · env(PC 환경 변수·하)
+                     "secret_sources": ["kms", "keyring", "env"]}
+SECRET_SOURCES = ("kms", "keyring", "env")
 DOMAIN_RE = re.compile(r"^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d{1,5})?$")
 
 
@@ -986,12 +1050,64 @@ def devkit_policy(request: Request):
     return devpolicy_for_client()
 
 
+class RunReport(BaseModel):
+    event: str            # start | end
+    mode: str = ""
+    os: str = ""
+    code: int | None = None
+    secrets: list[str] = []
+
+
+@app.post("/api/devkit/run")
+def devkit_run(body: RunReport, request: Request):
+    """개발 PC 실행 기록(P12) — mcp-test 가 시작·끝에 남긴다(비밀값은 이름만)."""
+    login = token_user(request)
+    if not login:
+        raise HTTPException(401)
+    event("devpc_" + ("end" if body.event == "end" else "start"), login, mode=body.mode, os=body.os, code=body.code,
+          secrets=body.secrets[:30], ip=request.headers.get("x-real-ip", ""))
+    return {"ok": True}
+
+
+class SecretAsk(BaseModel):
+    names: list[str]
+    repo: str = ""
+
+
+@app.post("/api/devkit/secrets")
+def devkit_secrets(body: SecretAsk, request: Request):
+    """mcp-test 가 실행 토큰으로 묻는다 — 그 사람 자신의 비밀값만(P15·P21). 값은 응답으로만 가고 어디에도 남기지 않는다."""
+    login = token_user(request)
+    if not login:
+        raise HTTPException(401, "실행 토큰이 없거나 지났습니다")
+    if "kms" not in load_devpolicy()["secret_sources"]:
+        raise HTTPException(403, "관리자가 키 중앙관리 출처를 끄셨습니다")
+    names = [n for n in body.names if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", n)][:30]
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "kit-secrets"))
+    import agent as secrets_agent
+    r = secrets_agent.request({"cmd": "user", "login": login, "names": names, "repo": body.repo})
+    if not r.get("ok"):
+        raise HTTPException(502, "키 저장소 오류: " + r.get("error", ""))
+    event("secrets", login, names=sorted(r["values"]), missing=r["missing"], ip=request.headers.get("x-real-ip", ""))   # 이름만 기록
+    return {"values": r["values"], "missing": r["missing"]}
+
+
+@app.get("/api/secrets/names")
+def my_secret_names(u=Depends(user)):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "kit-secrets"))
+    import agent as secrets_agent
+    r = secrets_agent.request({"cmd": "names", "login": u["login"]})
+    return {"names": r.get("names", []), "manage": f"{PUBLIC}/git/user/settings/actions/secrets"}
+
+
 class DevPolicy(BaseModel):
     sandbox: str                  # required | off
     allowed_domains: list[str] = []
     goose_mode_session: str = "approve"
     goose_mode_run: str = "auto"
     linux_container_mode: bool = False
+    hitl_required: bool = True
+    secret_sources: list[str] = ["kms", "keyring", "env"]
     expected_version: int
 
 
@@ -1008,6 +1124,10 @@ def devpolicy_put(body: DevPolicy, who=Depends(superadmin)):
     modes = {"approve", "smart_approve", "auto", "chat"}
     if body.sandbox not in ("required", "off") or body.goose_mode_session not in modes or body.goose_mode_run not in modes:
         raise HTTPException(400, "값이 올바르지 않습니다")
+    if not body.secret_sources or any(x not in SECRET_SOURCES for x in body.secret_sources):
+        raise HTTPException(400, "비밀값 출처는 kms · keyring · env 중에서 하나 이상")
+    if body.hitl_required and body.goose_mode_session != "approve":
+        raise HTTPException(400, "사람 승인 강제를 켜면 대화형 툴 호출은 '매번 묻기' 여야 합니다")
     doms = []
     for d in body.allowed_domains:
         d = d.strip().lower()
@@ -1016,7 +1136,8 @@ def devpolicy_put(body: DevPolicy, who=Depends(superadmin)):
         doms.append(d)
     new = {"version": cur["version"] + 1, "sandbox": body.sandbox, "allowed_domains": sorted(set(doms)),
            "goose_mode": {"session": body.goose_mode_session, "run": body.goose_mode_run}, "workspace_only": True,
-           "linux_container_mode": body.linux_container_mode, "by": who, "at": _time.time()}
+           "linux_container_mode": body.linux_container_mode, "hitl_required": body.hitl_required,
+           "secret_sources": [x for x in SECRET_SOURCES if x in body.secret_sources], "by": who, "at": _time.time()}
     DEVPOLICY.write_text(json.dumps(new, ensure_ascii=False, indent=1))
     event("devpolicy", who, version=new["version"], sandbox=new["sandbox"], domains=len(doms))
     return devpolicy_for_client()
@@ -1025,3 +1146,11 @@ def devpolicy_put(body: DevPolicy, who=Depends(superadmin)):
 @app.get("/admin/devpolicy")
 def devpolicy_page(_=Depends(admin)):
     return FileResponse(Path(__file__).parent / "static" / "devpolicy.html")
+
+
+# ── 거버넌스 화면: 감시자(P17) · 자산 현황(P18·P19) · 정규식 차단(P20) ────────
+import governance  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+governance.register(app, SimpleNamespace(user=user, admin=admin, superadmin=superadmin, event=event, gitea_admin=gitea_admin,
+                                         publisher=publisher, REQUESTS=REQUESTS, effective_verdict=effective_verdict))

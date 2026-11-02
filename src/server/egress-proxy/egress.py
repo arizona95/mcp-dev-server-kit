@@ -187,7 +187,7 @@ def apply_access():
     with open(ACCESS_CONF, "w") as f:
         f.write(conf)
     if os.path.exists("/run/nginx.pid"):
-        subprocess.run(["nginx", "-c", "/run/kit-nginx.conf", "-s", "reload"], check=True)
+        subprocess.run(["nginx", "-c", "/dev/shm/kit/nginx.conf", "-s", "reload"], check=True)
         time.sleep(1.5)   # reload 는 비동기 — 새 워커가 받을 때까지 기다린 뒤 '적용됨' 이라고 답한다
     return len(a.get("entries", [])) if a.get("mode") == "list" else 0
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 # MCP Dev Kit 설치 (리눅스) — 포털 다운로드 페이지가 서버 주소·해시를 채워서 내려준다.
-# 사용: curl -fsSL {{PUBLIC}}/download/install.sh | KIT_TOKEN=<개인 키> sh
+# 사용: curl -fsSL {{PUBLIC}}/download/install.sh | KIT_TOKEN=<내려받기 코드> sh   (코드는 30분 동안 설치 파일만 받는다 — PC 에 저장하지 않음)
 # 설치되는 것: goose · srt 샌드박스(sandbox-runtime) · mcp-test (실행할 때마다 서버 정책을 받아 srt 안에서 goose 실행)
 set -eu
 PUBLIC="{{PUBLIC}}"
@@ -8,7 +8,7 @@ FILE="{{GOOSE_FILE}}"
 SHA256="{{GOOSE_SHA256}}"
 SRT_SHA256="{{SRT_SHA256}}"
 MJS_SHA256="{{MJS_SHA256}}"
-: "${KIT_TOKEN:?포털 다운로드 페이지에서 개인 키를 발급받아 KIT_TOKEN 으로 넘겨 주세요}"
+: "${KIT_TOKEN:?포털 다운로드 페이지의 설치 명령을 그대로 붙여 넣어 주세요 (내려받기 코드 포함)}"
 
 DIR="$HOME/.local/share/mcp-dev-kit"
 BIN="$HOME/.local/bin"
@@ -47,7 +47,7 @@ rm -rf "$DIR/srt-bundle" && tar xzf "$DIR/srt-bundle.tgz" -C "$DIR" && rm -f "$D
 get mcp-test.mjs "$MJS_SHA256"
 
 umask 077
-printf '%s\n' "$KIT_TOKEN" > "$CONF/token"
+rm -f "$CONF/token"   # 예전 판이 남긴 개인 키 파일 — 이제 PC 에 키를 두지 않는다(mcp-test 가 실행마다 로그인)
 CA_PEM='{{CA_PEM}}'
 CA_BUNDLE=""
 if [ -n "$CA_PEM" ]; then
