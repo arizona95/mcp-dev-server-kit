@@ -45,7 +45,7 @@ async function load() {
     .map(([v, t]) => `<div><b>${esc(v)}</b><span>${t}</span></div>`).join("");
   $("users").innerHTML = Object.entries(d.llm.users).map(([u, x]) => `<tr><td><b>${esc(u)}</b></td><td>${x.calls}</td><td>${x.denied ? `<span class="chip no">${x.denied}</span>` : 0}</td>
     <td>${kb(x.bytes_in)}</td><td>${kb(x.bytes_out)}</td><td class="dim nw">${when(x.last)}</td>
-    <td><button class="btn red sm" data-kill="${esc(u)}">끊기</button></td></tr>`).join("") || '<tr><td colspan="7" class="dim">없음</td></tr>';
+    <td>${u.startsWith("(") ? '<span class="dim">-</span>' : `<button class="btn red sm" data-kill="${esc(u)}">끊기</button>`}</td></tr>`).join("") || '<tr><td colspan="7" class="dim">없음</td></tr>';
   $("calls").innerHTML = d.llm.recent.map(e => `<tr><td class="dim nw">${when(e.ts)}</td><td>${esc(e.user || "(키 틀림)")}</td><td class="mono">${esc(e.ip)}</td>
     <td class="mono">${esc(e.path)}</td><td><span class="chip ${e.status < 400 ? "ok" : "no"}">${e.status}</span></td><td class="dim">${(+e.sec).toFixed(1)}s</td></tr>`).join("") || '<tr><td colspan="6" class="dim">없음</td></tr>';
   $("svc").innerHTML = d.services.map(x => `<tr><td class="mono">${esc(x.name)}</td><td><span class="chip ${x.state === "RUNNING" || (x.state === "EXITED" && x.name === "gitea-bootstrap") ? "ok" : "no"}">${esc(x.state)}</span></td><td class="dim">${esc(x.detail)}</td></tr>`).join("");

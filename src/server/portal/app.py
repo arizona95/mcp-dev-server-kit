@@ -405,7 +405,9 @@ class TokenRevoke(BaseModel):
 @app.post("/api/tokens/revoke")
 def revoke_tokens(body: TokenRevoke, u=Depends(user)):
     """즉시 중단(kill switch): 그 사람의 실행 토큰·내려받기 코드를 모두 지운다 → 다음 LLM·정책·비밀값 요청부터 거부."""
-    login = body.login or u["login"]
+    login = body.login.strip() if body.login else u["login"]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", login):   # '(키 틀림)' 같은 표시용 이름이 오면 자기 토큰을 끊지 않게 거부
+        raise HTTPException(400, "계정 이름이 아닙니다")
     if login != u["login"] and not u["is_admin"]:
         raise HTTPException(403)
     tokens = load_tokens()
