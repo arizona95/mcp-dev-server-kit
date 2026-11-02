@@ -401,6 +401,16 @@ def download_file(name: str, request: Request):
     raise HTTPException(404)
 
 
+@app.get("/api/devkit/identity")
+def devkit_identity(request: Request):
+    """설치 스크립트가 git 커밋 이름·이메일을 사내 계정 그대로 맞출 때 쓴다(게시자 신원 P18)."""
+    login = token_user(request, kind=("download", "run"))
+    if not login:
+        raise HTTPException(401)
+    u = json.loads(gitea_admin(f"/api/v1/users/{urllib.parse.quote(login)}"))
+    return {"login": login, "name": u.get("full_name") or login, "email": u.get("email") or f"{login}@users.noreply"}
+
+
 @app.get("/api/download")
 def download_info(u=Depends(user)):
     files = goose_files()

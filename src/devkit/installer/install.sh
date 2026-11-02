@@ -65,6 +65,12 @@ if [ -n "$CA_PEM" ]; then
   # git 도 키트 주소에서는 사내 CA 를 쓴다 (시스템 저장소에 CA 가 없는 PC 대비)
   command -v git >/dev/null 2>&1 && git config --global "http.$PUBLIC/.sslCAInfo" "$CONF/kit-ca.pem"
 fi
+# git 커밋 이름·이메일 = 사내 계정 그대로(비어 있을 때만) — 누가 올렸는지 신원이 맞게(P18)
+if command -v git >/dev/null 2>&1 && [ -z "$(git config --global user.email || true)" ]; then
+  ME=$(curl -fsSL -H "Authorization: Bearer $KIT_TOKEN" "$PUBLIC/api/devkit/identity" || true)
+  [ -n "$ME" ] && git config --global user.name "$(printf '%s' "$ME" | sed -n 's/.*"name": *"\([^"]*\)".*/\1/p')" \
+    && git config --global user.email "$(printf '%s' "$ME" | sed -n 's/.*"email": *"\([^"]*\)".*/\1/p')"
+fi
 cat > "$CONF/kit.json" <<JSON
 {"public": "$PUBLIC", "dir": "$DIR", "goose": "$DIR/goose",
  "srt_cli": "$DIR/srt-bundle/node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js", "ca_bundle": "$CA_BUNDLE"}

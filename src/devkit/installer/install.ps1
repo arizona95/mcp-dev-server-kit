@@ -82,6 +82,12 @@ node "$Dir\mcp-test.mjs" %*
 "@
 Set-Content -Path (Join-Path $Dir 'mcp-test.cmd') -Value $Cmd -Encoding OEM
 
+# git 커밋 이름·이메일 = 사내 계정 그대로(비어 있을 때만) — 누가 올렸는지 신원이 맞게(P18)
+if ((Get-Command git -ErrorAction SilentlyContinue) -and -not (git config --global user.email)) {
+  $me = Invoke-RestMethod -UseBasicParsing -Headers @{ Authorization = "Bearer $env:KIT_TOKEN" } -Uri "$Public/api/devkit/identity"
+  git config --global user.name $me.name; git config --global user.email $me.email
+}
+
 $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if (-not ($UserPath -split ';' -contains $Dir)) {
   [Environment]::SetEnvironmentVariable('Path', "$UserPath;$Dir", 'User')
