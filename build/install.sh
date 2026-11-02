@@ -31,10 +31,19 @@ echo "4/5 시작"
 docker run -d --name "$CT" --restart unless-stopped --cap-add NET_ADMIN --env-file "$KIT/gate.env" \
   -p "${KIT_PUBLISH:-443:443}" -v mcp-kit-data:/data -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$KIT/tls":/etc/kit/tls:ro -v "$KIT/releases":/releases:ro "$IMAGE" >/dev/null
-for i in $(seq 1 60); do docker exec "$CT" kit verify --quick >/dev/null 2>&1 && break; sleep 5; done
+# 서비스가 다 뜰 때까지만 기다린다(처음 설치는 LLM 키가 아직 없어 전체 점검이 통과할 수 없다)
+for i in $(seq 1 60); do docker exec "$CT" kit verify --quick 2>/dev/null | grep -q '^\[ OK \] 서비스' && break; sleep 5; done
 echo "5/5 점검"
+if docker exec "$CT" kit verify --quick 2>&1 | grep -q 'LLM 공급자 키 없음'; then
+  docker exec "$CT" kit verify --quick 2>&1 | grep '^\[ OK \] 서비스' || true
+  echo
+  docker exec "$CT" kit version
+  echo
+  echo "다음: LLM 공급자 키를 키 저장소에 넣고 전체 점검을 합니다."
+  echo "  sudo docker exec -i $CT kit llm-key < 키파일    (그 뒤 키파일은 지웁니다)"
+  echo "  sudo docker exec $CT kit verify"
+  exit 0
+fi
 docker exec "$CT" kit verify 2>&1 | grep -v '^\[verify-' || true
 echo
 docker exec "$CT" kit version
-echo
-echo "다음: LLM 공급자 키를 키 저장소에 넣습니다 → docker exec -i $CT kit llm-key < 키파일   (그 뒤 키파일은 지웁니다)"
