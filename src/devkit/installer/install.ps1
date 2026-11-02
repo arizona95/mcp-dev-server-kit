@@ -12,7 +12,8 @@ if (-not $env:KIT_TOKEN) { throw '포털 다운로드 페이지에서 개인 키
 # 샌드박스(srt)에 필요한 것: Node 22.12 이상 (윈도우는 그 밖에 추가 설치 없음 — 처음 한 번 관리자 준비 단계만)
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) { throw 'Node 22.12 이상을 먼저 설치해 주세요 (사내 배포본)' }
-& node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a==22&&b>=12)?0:1)'
+# Windows PowerShell 5.1 은 외부 프로그램 인자 속 큰따옴표를 지운다 — JS 안은 작은따옴표만 쓴다
+& node -e 'const [a,b]=process.versions.node.split(''.'').map(Number); process.exit(a>22||(a==22&&b>=12)?0:1)'
 if ($LASTEXITCODE -ne 0) { throw "Node 22.12 이상이 필요합니다 (지금 $(node --version))" }
 
 $Dir = Join-Path $env:LOCALAPPDATA 'mcp-dev-kit'
