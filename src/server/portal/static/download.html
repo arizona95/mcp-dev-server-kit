@@ -51,7 +51,7 @@ pre { margin: 0; padding: 14px 16px; border-radius: 10px; background: #0f1720; c
     <p class="kicker">3</p>
     <h2>사용</h2>
     <pre>mcp-test --with-extension "my-mcp"          (대화형 — 툴 호출마다 승인)
-mcp-test run -t "툴 없이 물어보기"            (run 은 정책상 툴 호출 없음)</pre>
+mcp-test run --with-extension "my-mcp" -t "질문 한 번"   (한 번 묻고 끝 — 툴 호출은 똑같이 승인)</pre>
     <p class="dim">실행할 때마다 브라우저가 열려 사내 로그인을 확인합니다. 지금 살아 있는 실행 토큰 <b id="active">0</b>개 ·
       <button class="btn line sm" id="kill">모두 끊기 (즉시 중단)</button></p>
   </section>

@@ -12,6 +12,7 @@ $Sha256 = '{{GOOSE_SHA256}}'
 $SrtSha256 = '{{SRT_SHA256}}'
 $MjsSha256 = '{{MJS_SHA256}}'
 $PyShimSha256 = '{{PYSHIM_SHA256}}'
+$GateSha256 = '{{GATE_SHA256}}'
 if (-not $env:KIT_TOKEN) { throw '포털 다운로드 페이지의 설치 명령을 그대로 붙여 넣어 주세요 (내려받기 코드 포함)' }
 
 # 샌드박스(srt)에 필요한 것: Node 22.12 이상 (윈도우는 그 밖에 추가 설치 없음 — 처음 한 번 관리자 준비 단계만)
@@ -46,6 +47,9 @@ if (Test-Path (Join-Path $Dir 'srt-bundle')) { Remove-Item -Recurse -Force (Join
 tar -xzf $Tgz -C $Dir
 Remove-Item $Tgz
 Get-KitFile 'mcp-test.mjs' $MjsSha256 | Out-Null
+# 사람 승인 관문 — 샌드박스 안에서 MCP 앞에 서서 툴 호출마다 mcp-test 에 묻는다
+Get-KitFile 'mcp-gate.mjs' $GateSha256 | Out-Null
+icacls (Join-Path $Dir 'mcp-gate.mjs') /grant '*S-1-5-32-545:RX' /Q | Out-Null
 # 샌드박스 안 파이썬 보정: srt 는 루프백도 허용 포트 범위 밖이면 막아 asyncio(socketpair)가 멈춘다 — 그 범위 안에서 쌍을 만든다
 New-Item -ItemType Directory -Force -Path (Join-Path $Dir 'pyshim') | Out-Null
 Move-Item -Force (Get-KitFile 'sitecustomize.py' $PyShimSha256) (Join-Path $Dir 'pyshim\sitecustomize.py')

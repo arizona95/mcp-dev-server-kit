@@ -26,6 +26,7 @@ const mode = args[0] === "run" ? "run" : "session";
 // mcp-test --with-extension … 처럼 옵션으로 시작하면 대화형(goose session)으로
 const gooseArgs = args.length && !args[0].startsWith("-") ? args : ["session", ...args];
 const say = m => process.stderr.write(`mcp-test: ${m}\n`);
+if (WIN) { try { execFileSync("cmd", ["/c", "chcp 65001>nul"], {stdio: "inherit"}); } catch {} }   // 샌드박스 안 goose 의 UTF-8 출력이 깨지지 않게
 const rand = () => randomBytes(12).toString("hex");
 
 // ① 실행 토큰 — 브라우저(사내 로그인)로 받아 127.0.0.1 로 돌려받는다
@@ -117,7 +118,8 @@ if (!WIN) env.GOOSE_PATH_ROOT = runRoot;
 // srt 는 샌드박스 안 TMPDIR 을 /tmp/claude 로 두고 그 폴더를 묶어 넣는다 — 없으면 goose 가 임시 파일을 못 만든다
 if (!WIN) mkdirSync("/tmp/claude", {recursive: true});
 
-say(`정책 v${policy.version} · 샌드박스 ${policy.sandbox === "required" ? (policy.linux_container_mode && !WIN ? "srt(컨테이너 약한 모드)" : "srt") : "끔"} · 바깥 허용 ${policy.network_allowed.join(", ")} · 작업 폴더 ${work} · 툴 호출 ${gooseMode}${policy.hitl_required ? "(정책 강제)" : ""}`);
+const hitlText = WIN && policy.sandbox === "required" ? (policy.hitl_required ? "툴 호출마다 승인(관문 — 정책 강제)" : "승인 없음") : `${gooseMode}${policy.hitl_required ? "(정책 강제)" : ""}`;
+say(`정책 v${policy.version} · 샌드박스 ${policy.sandbox === "required" ? (policy.linux_container_mode && !WIN ? "srt(컨테이너 약한 모드)" : "srt") : "끔"} · 바깥 허용 ${policy.network_allowed.join(", ")} · 작업 폴더 ${work} · ${hitlText}`);
 if (wanted.length) say(`MCP 비밀값: ${wanted.map(n => `${envOf[n] !== n ? `${envOf[n]}←${n}` : n}(${n in secrets ? from[n] : "없음"})`).join(", ")}`);
 if (missing.length) say(`없는 비밀값 ${missing.join(", ")} — 사내 Git 설정 > Actions > Secrets 에 넣어 주세요: ${kit.public}/git/user/settings/actions/secrets`);
 
@@ -149,26 +151,78 @@ if (policy.sandbox !== "required") {
   const file = join(CONF, "srt-settings.json");
   writeFileSync(file, JSON.stringify(settings, null, 2));
   if (!WIN) {
-    spawn(process.execPath, [kit.srt_cli, "--settings", file, kit.goose, ...gooseArgs], {stdio: "inherit", env: {...env, ...values}}).on("exit", done);
+    // --no-profile: goose 기본 내장 도구(shell·edit 등)를 끄고 명령줄로 준 MCP 만
+    const lArgs = ["session", "run"].includes(gooseArgs[0]) ? [gooseArgs[0], "--no-profile", ...gooseArgs.slice(1)] : gooseArgs;
+    spawn(process.execPath, [kit.srt_cli, "--settings", file, kit.goose, ...lArgs], {stdio: "inherit", env: {...env, ...values}}).on("exit", done);
   } else {
-    // 윈도우 srt 는 샌드박스 명령에 PATH·프록시 변수만 넘긴다(명령은 cmd.exe 가 실행). 일반 설정은 안쪽 cmd 가 set 으로 넣고,
-    // 토큰·비밀값은 명령줄·파일에 드러나지 않게 한 번만 읽히는 네임드 파이프로 넘긴다(set /p NAME=<\\.\pipe\…).
-    const pipes = [];
-    const pipeSet = Object.entries(values).map(([k, v]) => {
-      const path = `\\\\.\\pipe\\kit-${rand()}`;
-      const s = netServer(sock => { sock.end(v + "\r\n"); s.close(); }).listen(path);
-      pipes.push(s);
-      return `set /p ${k}=<"${path}"&& `;
-    }).join("");
+    // 윈도우: srt(알파)는 샌드박스 안 프로세스에 키보드·파이프 입력을 넘기지 않는다 → goose 대화형 세션이 바로 닫힌다.
+    // 그래서 mcp-test 가 터미널을 잡고 질문을 한 줄씩 받아, 샌드박스 안에서 'goose run'(세션 이어 쓰기)으로 돌린다.
+    // 사람 승인(P4)은 MCP 앞의 관문(mcp-gate — 샌드박스 안)이 툴 호출마다 이 프로세스에 루프백 포트로 묻고, 여기서 터미널로 묻는다.
+    const { createInterface } = await import("node:readline/promises");
+    const rl = createInterface({input: process.stdin, output: process.stderr});
+    let approvals = Promise.resolve();
+    const gateSrv = netServer(sock => {
+      let buf = "";
+      sock.on("data", d => {
+        buf += d;
+        if (!buf.includes("\n")) return;
+        const call = JSON.parse(buf);
+        const args = JSON.stringify(call.args).slice(0, 300);
+        approvals = approvals.then(async () => {
+          const allow = !policy.hitl_required ? true
+            : /^(y|yes|ㅇ|예)$/i.test((await rl.question(`\n▶ 툴 호출 승인 요청: ${call.tool} ${args}\n  허용할까요? [y/N] `)).trim());
+          sock.end(JSON.stringify({allow}) + "\n");
+          if (!allow) say(`거부했습니다 — ${call.tool} 는 실행되지 않습니다`);
+        });
+      });
+    });
+    let gatePort = 0;
+    for (let p = WIN_PORTS[1] - 8; p > WIN_PORTS[0] + 8 && !gatePort; p--) {   // srt 프록시는 범위 앞쪽, 파이썬 보정은 맨 뒤를 쓴다
+      gatePort = await new Promise(r => gateSrv.once("error", () => r(0)).listen(p, "127.0.0.1", () => r(p)));
+    }
+    const gate = join(kit.dir, "mcp-gate.mjs").replace(/\\/g, "/");
+    const wrap = a => a.map((x, i) => a[i - 1] === "--with-extension" ? `node --preserve-symlinks-main ${gate} ${gatePort} ${Buffer.from(x).toString("base64url")}` : x);
     const winQuote = a => /^[\w.:\\\/=-]+$/.test(a) ? a : `"${a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`;
-    const gooseEnv = ["GOOSE_PROVIDER", "GOOSE_MODEL", "OPENAI_HOST", "GOOSE_TELEMETRY_OFF", "GOOSE_DISABLE_KEYRING", "GOOSE_MODE", "SSL_CERT_FILE"]
+    const gooseEnv = ["GOOSE_PROVIDER", "GOOSE_MODEL", "OPENAI_HOST", "GOOSE_TELEMETRY_OFF", "GOOSE_DISABLE_KEYRING", "SSL_CERT_FILE"]
       .filter(k => env[k]).map(k => `set "${k}=${env[k]}"&& `).join("");
-    const root = `%TEMP%\\kit-goose-${rand()}`;
-    // 샌드박스 사용자도 PC 공통 NO_PROXY 를 물려받는다 — 그대로 두면 사내 서버로 직접 붙다 WFP 에 막히므로 비운다
-    // 파이썬 보정(pyshim/sitecustomize.py): 루프백 socketpair 를 허용 범위 안에서 만든다 — 없으면 asyncio MCP 가 시작하다 멈춘다
-    const line = `chcp 65001>nul&& set "NO_PROXY="&& set "no_proxy="&& set "PYTHONPATH=${join(kit.dir, "pyshim")}"&& set "KIT_LOOPBACK_RANGE=${WIN_PORTS.join("-")}"&& `
-      + `mkdir "${root}"&& set "GOOSE_PATH_ROOT=${root}"&& ${gooseEnv}${pipeSet}` + [kit.goose, ...gooseArgs].map(winQuote).join(" ") + ` & rmdir /s /q "${root}"`;
-    spawn(process.execPath, [kit.srt_cli, "--settings", file, "-c", line], {stdio: "inherit", env})
-      .on("exit", c => { pipes.forEach(p => p.close()); done(c); });
+    const root = `%TEMP%\\kit-goose-${rand()}`;   // 이 mcp-test 실행 동안 같은 폴더 = 같은 세션 기록 · 끝나면 지운다
+    const session = `kit-${rand().slice(0, 8)}`;
+    // 한 번의 goose run — 토큰·비밀값은 매번 한 번만 읽히는 네임드 파이프로(명령줄·파일에 안 남김)
+    const turn = (gArgs) => new Promise(resolve => {
+      const pipes = [];
+      const pipeSet = Object.entries(values).map(([k, v]) => {
+        const path = `\\\\.\\pipe\\kit-${rand()}`;
+        const sv = netServer(sock => { sock.end(v + "\r\n"); sv.close(); }).listen(path);
+        pipes.push(sv);
+        return `set /p ${k}=<"${path}"&& `;
+      }).join("");
+      // 샌드박스 사용자도 PC 공통 NO_PROXY 를 물려받는다 — 비운다 · 파이썬 보정(pyshim): 루프백 socketpair 를 허용 범위 안에서
+      const line = `chcp 65001>nul&& set "NO_PROXY="&& set "no_proxy="&& set "PYTHONPATH=${join(kit.dir, "pyshim")}"&& set "KIT_LOOPBACK_RANGE=${WIN_PORTS.join("-")}"&& `
+        + `(if not exist "${root}" mkdir "${root}")&& set "GOOSE_PATH_ROOT=${root}"&& set "GOOSE_MODE=auto"&& ${gooseEnv}${pipeSet}`
+        + [kit.goose, ...wrap(gArgs)].map(winQuote).join(" ");
+      spawn(process.execPath, [kit.srt_cli, "--settings", file, "-c", line], {stdio: ["ignore", "inherit", "inherit"], env})
+        .on("exit", c => { pipes.forEach(x => x.close()); resolve(c); });
+    });
+    const finish = async c => {
+      await new Promise(r => spawn(process.execPath, [kit.srt_cli, "--settings", file, "-c", `rmdir /s /q "${root}"`], {stdio: "ignore", env}).on("exit", r));
+      gateSrv.close(); rl.close(); done(c);
+    };
+    if (mode === "run") {
+      finish(await turn(["run", "--no-profile", ...gooseArgs.slice(1)]));
+    } else {
+      // 대화형: goose session 대신 — 질문마다 goose run 으로 같은 세션을 이어 쓴다
+      const ext = gooseArgs.filter((x, i) => x === "--with-extension" || gooseArgs[i - 1] === "--with-extension");
+      say("대화를 시작합니다 — 질문을 적고 Enter (끝내려면 exit)");
+      let first = true, code = 0;
+      for (;;) {
+        const q = (await rl.question("\n질문> ")).trim();
+        if (!q) continue;
+        if (/^(exit|quit|\/q|끝)$/i.test(q)) break;
+        // --no-profile: goose 기본 내장 도구(shell·edit 등)는 관문을 거치지 않으므로 끈다 — 명령줄로 준 MCP 만
+        code = await turn(["run", "--no-profile", "-n", session, ...(first ? [] : ["-r"]), ...ext, "-t", q]);
+        first = false;
+      }
+      finish(code);
+    }
   }
 }

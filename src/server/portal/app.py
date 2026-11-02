@@ -360,10 +360,12 @@ def render_installer(name, os_name):
     srt = DEVKIT / "hosts" / "srt" / "srt-bundle.tgz"
     mjs = DEVKIT / "installer" / "mcp-test.mjs"
     shim = DEVKIT / "hosts" / "pyshim" / "sitecustomize.py"
+    gate = DEVKIT / "installer" / "mcp-gate.mjs"
     for k, v in {"PUBLIC": PUBLIC, "GOOSE_FILE": file, "GOOSE_SHA256": digest, "CA_PEM": ca,
                  "SRT_SHA256": hashlib.sha256(srt.read_bytes()).hexdigest() if srt.exists() else "",
                  "MJS_SHA256": hashlib.sha256(mjs.read_bytes()).hexdigest(),
-                 "PYSHIM_SHA256": hashlib.sha256(shim.read_bytes()).hexdigest()}.items():
+                 "PYSHIM_SHA256": hashlib.sha256(shim.read_bytes()).hexdigest(),
+                 "GATE_SHA256": hashlib.sha256(gate.read_bytes()).hexdigest()}.items():
         text = text.replace("{{" + k + "}}", v)
     return text
 
@@ -394,7 +396,7 @@ def download_file(name: str, request: Request):
         return FileResponse(DEVKIT / "policies" / "windows" / name, filename=name)
     if name == "sitecustomize.py":   # 윈도우 srt 샌드박스 안 파이썬 보정 (루프백 허용 범위 socketpair)
         return FileResponse(DEVKIT / "hosts" / "pyshim" / name, filename=name)
-    if name in ("srt-bundle.tgz", "mcp-test.mjs"):
+    if name in ("srt-bundle.tgz", "mcp-test.mjs", "mcp-gate.mjs"):
         return FileResponse(DEVKIT / ("hosts/srt" if name.endswith(".tgz") else "installer") / name, filename=name)
     raise HTTPException(404)
 
