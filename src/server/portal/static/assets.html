@@ -18,7 +18,7 @@
     <div class="scroll"><table><thead><tr><th>MCP · 저장소</th><th>게시자</th><th>단계</th><th>까닭 · 이력</th><th>마지막 활동</th></tr></thead><tbody id="rows"></tbody></table></div>
   </section>
   <section class="card"><p class="kicker">사람별</p><h2>개발자</h2>
-    <div class="scroll"><table><thead><tr><th>개발자</th><th>이메일</th><th id="ph"></th></tr></thead><tbody id="people"></tbody></table></div>
+    <div class="scroll"><table><thead><tr><th>개발자</th><th>이메일</th><th>소속</th><th id="ph"></th></tr></thead><tbody id="people"></tbody></table></div>
   </section>
   <div class="err" id="err"></div>
 </main>
@@ -35,12 +35,12 @@ function paint() {
   $("title").textContent = `MCP ${A.rows.length}개 · 개발자 ${A.people.length}명`;
   $("counts").textContent = A.stages.map(s => `${s} ${A.counts[s]}`).join(" · ");
   $("rows").innerHTML = rows.map(r => `<tr><td><b>${esc(r.name)}</b><br><a class="dim mono" href="/git/${esc(r.repo)}">${esc(r.repo)}</a></td>
-    <td>${esc(r.owner_name || r.owner)}<br><span class="dim">${esc(r.owner_email || "(이메일 없음)")}</span></td>
+    <td>${esc(r.owner_name || r.owner)}<br><span class="dim">${esc(r.owner_email || "(이메일 없음)")}</span>${r.owner_dept ? `<br><span class="dim">소속 ${esc(r.owner_dept)}</span>` : ""}</td>
     <td><span class="pill s-${esc(r.stage.split(" ")[0])}">${esc(r.stage)}</span></td>
     <td>${esc(r.why)}<details><summary class="dim">이력 ${r.history.length}</summary>${r.history.map(h => `<div class="dim">${when(h.ts)} · ${esc(h.what)}</div>`).join("") || '<div class="dim">없음</div>'}</details></td>
     <td class="dim">${when(r.last_activity) || when(r.updated)}</td></tr>`).join("") || '<tr><td colspan="5" class="dim">없음</td></tr>';
   $("ph").textContent = A.stages.join(" · ");
-  $("people").innerHTML = A.people.map(p => `<tr><td><a href="#" data-who="${esc(p.login)}"><b>${esc(p.name || p.login)}</b></a> <span class="dim mono">${esc(p.login)}</span></td><td>${esc(p.email)}</td>
+  $("people").innerHTML = A.people.map(p => `<tr><td><a href="#" data-who="${esc(p.login)}"><b>${esc(p.name || p.login)}</b></a> <span class="dim mono">${esc(p.login)}</span></td><td>${esc(p.email)}</td><td>${esc(p.dept || "")}</td>
     <td class="mono">${A.stages.map(s => p[s]).join(" · ")}</td></tr>`).join("");
 }
 $("people").onclick = ev => { const a = ev.target.closest("[data-who]"); if (a) { ev.preventDefault(); $("who").value = a.dataset.who; paint(); scrollTo(0, 0); } };

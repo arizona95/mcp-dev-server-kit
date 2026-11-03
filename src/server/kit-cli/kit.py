@@ -45,8 +45,15 @@ KIT_SSO_DISCOVERY_URL=
 KIT_SSO_CLIENT_ID=
 # Gitea 사용자 이름을 IdP 의 어느 값에서: email(@ 앞 — 기본) · preferred_username · nickname · userid
 KIT_SSO_USERNAME=email
-# IdP 그룹 이름 — 이 그룹 사람은 주관리자(비우면 주관리자는 kitadmin 만)
+# IdP 그룹 이름 — 이 그룹 사람은 주관리자(비우면 주관리자는 kitadmin 만). 로그인할 때마다 IdP 그룹대로 다시 맞춘다
 KIT_SSO_ADMIN_GROUP=
+# 소속(부서)으로 쓸 IdP 그룹 이름들(쉼표로) — 로그인할 때마다 Gitea 조직 KIT_SSO_DEPT_ORG 의 같은 이름 팀으로 맞추고, 게시자 신원(P18)에 소속으로 남긴다
+#   팀 이름은 영문·숫자·-·_·. 만(Gitea 규칙). 예: KIT_SSO_DEPT_GROUPS=security-team,platform-team
+KIT_SSO_DEPT_GROUPS=
+KIT_SSO_DEPT_ORG=corp
+# 그룹 목록이 담긴 IdP 값 이름과, 그 값을 받으려고 더 요청할 scope(쉼표로 — IdP 에 따라 groups 등)
+KIT_SSO_GROUP_CLAIM=groups
+KIT_SSO_SCOPES=
 
 # 기기 인증서(P6): required 이면 포털·Git 화면은 회사가 발급한 기기 인증서(kit device-cert issue <PC이름>)가 있는 PC 에서만 열린다
 KIT_DEVICE_CERT=off
@@ -194,6 +201,31 @@ def llm_key():
         print("다음: sudo docker exec mcp-dev-server-kit kit verify")
 
 
+def gitea_api(method, path, body=None):
+    import base64
+    user, pw = os.environ.get("KIT_ADMIN_USER", "kitadmin"), os.environ["PORTAL_ADMIN_PASSWORD"]
+    req = urllib.request.Request("http://127.0.0.1:3000/api/v1" + path, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json", "Authorization": "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read() or b"null")
+
+
+def dept_teams(org, depts):
+    """소속 팀을 담을 Gitea 조직·팀을 만든다(있으면 그대로). 팀은 저장소 권한 없이 소속 표시용."""
+    import urllib.error
+    try:
+        gitea_api("GET", f"/orgs/{org}")
+    except urllib.error.HTTPError:
+        gitea_api("POST", "/orgs", {"username": org, "full_name": "소속 (회사 SSO 그룹)", "visibility": "private"})
+        print(f"소속 조직을 만들었습니다: {org}")
+    have = {t["name"] for t in gitea_api("GET", f"/orgs/{org}/teams?limit=200")}
+    for g in depts:
+        if g not in have:
+            gitea_api("POST", f"/orgs/{org}/teams", {"name": g, "description": "회사 SSO 그룹 — 로그인할 때마다 맞춤", "permission": "read",
+                                                     "includes_all_repositories": False, "units": ["repo.code"]})
+            print(f"소속 팀을 만들었습니다: {org}/{g}")
+
+
 def sso():
     """회사 SSO(OIDC)를 Gitea 로그인에 붙인다 — gate.env 의 KIT_SSO_* + 키 저장소의 KIT_SSO_CLIENT_SECRET. 다시 실행하면 값을 고쳐 쓴다."""
     sys.path.insert(0, str(SERVER / "kit-secrets"))
@@ -223,8 +255,19 @@ def sso():
     row = next((l.split() for l in listing.splitlines()[1:] if len(l.split()) > 1 and l.split()[1] == name), None)
     opts = ["--name", name, "--provider", "openidConnect", "--key", cid, "--secret", sec, "--auto-discover-url", disc,
             "--scopes", "openid", "--scopes", "email", "--scopes", "profile", "--skip-local-2fa"]
-    if os.environ.get("KIT_SSO_ADMIN_GROUP"):   # IdP 의 이 그룹 = 주관리자(Gitea 관리자)
-        opts += ["--group-claim-name", os.environ.get("KIT_SSO_GROUP_CLAIM", "groups"), "--admin-group", os.environ["KIT_SSO_ADMIN_GROUP"]]
+    for sc in filter(None, (x.strip() for x in os.environ.get("KIT_SSO_SCOPES", "").split(","))):
+        opts += ["--scopes", sc]
+    opts += ["--full-name-claim-name", "name"]   # 실명 = IdP 의 name 값
+    admin_g = os.environ.get("KIT_SSO_ADMIN_GROUP", "")
+    depts = [x.strip() for x in os.environ.get("KIT_SSO_DEPT_GROUPS", "").split(",") if x.strip()]
+    if admin_g or depts:
+        opts += ["--group-claim-name", os.environ.get("KIT_SSO_GROUP_CLAIM") or "groups"]
+    if admin_g:   # IdP 의 이 그룹 = 주관리자(Gitea 관리자)
+        opts += ["--admin-group", admin_g]
+    if depts:     # IdP 그룹 = 소속 — 같은 이름의 Gitea 팀으로(그룹에서 빠지면 팀에서도 빠진다)
+        org = os.environ.get("KIT_SSO_DEPT_ORG") or "corp"
+        dept_teams(org, depts)
+        opts += ["--group-team-map", json.dumps({g: {org: [g]} for g in depts}), "--group-team-map-removal"]
     cmd = gitea + (["update-oauth", "--id", row[0]] if row else ["add-oauth"]) + opts
     p = subprocess.run(cmd, capture_output=True, text=True)
     print(("SSO 를 고쳤습니다: " if row else "SSO 를 붙였습니다: ") + name if p.returncode == 0 else "실패: " + (p.stderr or p.stdout)[-400:].replace(sec, "***"))

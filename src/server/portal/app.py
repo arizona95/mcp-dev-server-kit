@@ -520,6 +520,25 @@ def gitea_admin(path):
         return r.read()
 
 
+_DEPT = {}
+
+
+def dept_of(login):
+    """소속(P18) = 회사 SSO 그룹이 맞춰 둔 Gitea 조직 KIT_SSO_DEPT_ORG 의 팀 — 로그인마다 IdP 그룹대로 바뀐다. 1분 캐시."""
+    import time as _t
+    hit = _DEPT.get(login)
+    if hit and _t.time() - hit[0] < 60:
+        return hit[1]
+    org = os.environ.get("KIT_SSO_DEPT_ORG") or "corp"
+    try:
+        teams = gitea_admin_send("GET", "/api/v1/user/teams?limit=50", sudo=login) or []
+        val = ", ".join(sorted(t["name"] for t in teams if (t.get("organization") or {}).get("username") == org))
+    except Exception:
+        val = ""
+    _DEPT[login] = (_t.time(), val)
+    return val
+
+
 def load_request(rid):
     f = REQUESTS / f"{rid}.json"
     if not re.fullmatch(r"[0-9a-z-]+", rid) or not f.exists():
@@ -574,7 +593,7 @@ def new_request(body: NewRequest, u=Depends(user)):
     rid = _t.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(3)
     REQUESTS.mkdir(parents=True, exist_ok=True)
     req = {"id": rid, "repo": body.repo, "ref": body.ref, "name": name,
-           "submitter": u["login"], "submitter_uid": u["uid"], "submitter_name": u.get("full_name", ""), "submitter_email": u.get("email", ""), "created": _t.time(), "status": "queued", "decision": "pending"}
+           "submitter": u["login"], "submitter_uid": u["uid"], "submitter_name": u.get("full_name", ""), "submitter_email": u.get("email", ""), "submitter_dept": dept_of(u["login"]), "created": _t.time(), "status": "queued", "decision": "pending"}
     save_request(req)
     event("request", u["login"], request=rid, repo=body.repo)
     return req
@@ -622,7 +641,7 @@ def decide(rid: str, d: Decision, u=Depends(user), who=Depends(admin)):
             raise HTTPException(409, f"검사 결과가 '{verdict}' 이라 승인할 수 없습니다 (막는 항목의 소명이 모두 허용되면 승인할 수 있습니다)")
         try:
             publisher.approve(r, who, identity={"login": r["submitter"], "uid": r.get("submitter_uid"), "name": r.get("submitter_name", ""),
-                                                "email": r.get("submitter_email", "")})
+                                                "email": r.get("submitter_email", ""), "dept": r.get("submitter_dept", "")})
         except ValueError as e:
             raise HTTPException(409, str(e))
         r["decision"] = "approved"
@@ -1270,7 +1289,7 @@ import governance  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
 _h = SimpleNamespace(user=user, admin=admin, superadmin=superadmin, event=event, gitea_admin=gitea_admin,
-                     publisher=publisher, REQUESTS=REQUESTS, effective_verdict=effective_verdict)
+                     publisher=publisher, REQUESTS=REQUESTS, effective_verdict=effective_verdict, dept_of=dept_of)
 governance.register(app, _h)
 
 # ── 버전 관리: 배포 묶음 목록·설치·진행 상태 · 적용 중 잠금 ─────────────────

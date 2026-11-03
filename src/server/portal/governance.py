@@ -1,6 +1,6 @@
 """거버넌스 화면 API — 감시자(P17) · 자산 현황(P18·P19) · LLM 게이트웨이 정규식 차단(P20).
 
-app.py 가 register(app, h) 로 붙인다 — h 는 app.py 의 의존성(user·admin·superadmin·event·gitea_admin·publisher·REQUESTS·effective_verdict).
+app.py 가 register(app, h) 로 붙인다 — h 는 app.py 의 의존성(user·admin·superadmin·event·gitea_admin·publisher·REQUESTS·effective_verdict·dept_of).
 """
 import json
 import os
@@ -213,6 +213,7 @@ def register(app, h):
             rows.append({"repo": full, "name": reg_name or (last or {}).get("name") or repo["name"], "owner": owner,
                          "owner_name": ident.get("name") or users.get(owner, {}).get("name", ""),
                          "owner_email": ident.get("email") or users.get(owner, {}).get("email", ""),
+                         "owner_dept": h.dept_of(owner) or ident.get("dept", ""),
                          "stage": stage, "why": why, "version": (reg or {}).get("version"), "requests": len(rq),
                          "created": repo.get("created_at"), "updated": repo.get("updated_at"),
                          "last_activity": max([x["ts"] or 0 for x in history] or [0]) or None, "history": history})
@@ -221,7 +222,7 @@ def register(app, h):
         stages = ("개발 중", "검사 중", "승인 대기", "탈락", "배포 중", "회수")
         people = {}
         for r in rows:
-            p = people.setdefault(r["owner"], {"login": r["owner"], "name": r["owner_name"], "email": r["owner_email"], **{s: 0 for s in stages}})
+            p = people.setdefault(r["owner"], {"login": r["owner"], "name": r["owner_name"], "email": r["owner_email"], "dept": r["owner_dept"], **{s: 0 for s in stages}})
             p[r["stage"]] += 1
         return {"marketplace_pcs": [{"ip": ip, "last": t} for ip, t in sorted(syncs.items(), key=lambda x: -x[1])],
                 "rows": sorted(rows, key=lambda r: (stages.index(r["stage"]), r["repo"])), "counts": {s: sum(r["stage"] == s for r in rows) for s in stages},
