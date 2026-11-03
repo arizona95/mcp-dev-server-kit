@@ -62,6 +62,11 @@ if docker exec "$CT" grep -q '공급자 키 없음' /dev/shm/kit-litellm/llm_key
   echo "     포털 '외부 접속'에서 pypi.org · files.pythonhosted.org 를 엽니다"
   exit 0
 fi
+# 키가 있으면 LLM 게이트웨이가 연결을 받을 때까지 기다린 뒤 점검(바로 점검하면 시작 중이라 'Connection refused' 로 실패한다)
+for i in $(seq 1 40); do
+  docker exec "$CT" /opt/kit/venv/bin/python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3)" 2>/dev/null && break
+  sleep 3
+done
 docker exec "$CT" kit verify 2>&1 | grep -v '^\[verify-' || true
 echo
 docker exec "$CT" kit version
