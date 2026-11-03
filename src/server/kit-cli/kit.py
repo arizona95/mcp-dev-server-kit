@@ -4,6 +4,7 @@
   kit verify          설치 점검: 서비스 · 외부 접속 통제 · LLM tool calling · osv.dev · good 통과/bad 차단
   kit mail-template   임직원 안내 메일 문안
   kit access-reset    접근제어를 '모두 허용'으로 되돌림 (IP 목록 실수로 잠겼을 때 — 서버에서 실행)
+  kit sso             회사 SSO 붙이기(gate.env KIT_SSO_* + 키 저장소 KIT_SSO_CLIENT_SECRET) · kit sso --remove = 떼기
 """
 import json
 import os
@@ -226,8 +227,44 @@ def dept_teams(org, depts):
             print(f"소속 팀을 만들었습니다: {org}/{g}")
 
 
+GITEA_CLI = ["runuser", "-u", "git", "--", "env", "HTTPS_PROXY=http://127.0.0.1:3128", "HTTP_PROXY=http://127.0.0.1:3128",
+             "NO_PROXY=127.0.0.1,localhost", "/opt/kit/bin/gitea", "--work-path", "/data/gitea", "--config", "/data/gitea/custom/conf/app.ini", "admin", "auth"]
+
+
+def sso_remove():
+    """회사 SSO 떼기 — Gitea 의 SSO 로그인 단추(인증 소스)와 kit sso 가 연 IdP 외부 접속을 지운다.
+    비밀번호 로그인 화면은 gate.env 의 KIT_SSO_DISCOVERY_URL 을 비우고 install.sh --recreate 하면 돌아온다. SSO 로 만들어진 계정은 그대로 둔다."""
+    name = os.environ.get("KIT_SSO_NAME", "corp-sso")
+    listing = subprocess.run(GITEA_CLI + ["list"], capture_output=True, text=True).stdout
+    row = next((l.split() for l in listing.splitlines()[1:] if len(l.split()) > 1 and l.split()[1] == name), None)
+    if row:
+        p = subprocess.run(GITEA_CLI + ["delete", "--id", row[0]], capture_output=True, text=True)
+        if p.returncode == 0:
+            print(f"SSO 로그인을 지웠습니다: {name}")
+        elif "still used" in (p.stderr + p.stdout):   # SSO 로 만들어진 계정이 있으면 Gitea 가 지우지 않는다 — 끄기만 된다(화면)
+            print(f"SSO 로 만들어진 계정이 있어 지우지 않았습니다. 끄려면 kitadmin 으로 사내 Git 의 Admin Settings → Identity & Access → "
+                  f"Authentication Sources → {name} 편집에서 'This Authentication Source is Activated' 를 끄고 [Update Authentication Source]. "
+                  "그 계정들이 비밀번호로 들어오게 하려면 User Accounts 에서 계정을 편집해 인증 소스를 Local 로 바꾸고 비밀번호를 정합니다")
+        else:
+            print("실패: " + (p.stderr or p.stdout)[-300:])
+    else:
+        print(f"SSO 로그인 {name} 이 없습니다")
+    sys.path.insert(0, str(SERVER / "egress-proxy"))
+    import egress as eg
+    keep = [r for r in eg.load_extra() if r.get("reason") != "회사 SSO(IdP) — kit sso"]
+    for r in [r for r in eg.load_extra() if r.get("reason") == "회사 SSO(IdP) — kit sso"]:
+        Path(eg.EXTRA).write_text(json.dumps(keep, ensure_ascii=False, indent=1))
+        eg.apply()
+        eg.log_change("remove", r, "kit sso --remove")
+        print(f"외부 접속 허용을 지웠습니다: {r['host']}:{r['port']} (회사 SSO)")
+    if os.environ.get("KIT_SSO_DISCOVERY_URL"):
+        print("gate.env 의 KIT_SSO_DISCOVERY_URL 을 비우고 install.sh --recreate 하면 비밀번호 로그인 화면이 돌아옵니다")
+
+
 def sso():
     """회사 SSO(OIDC)를 Gitea 로그인에 붙인다 — gate.env 의 KIT_SSO_* + 키 저장소의 KIT_SSO_CLIENT_SECRET. 다시 실행하면 값을 고쳐 쓴다."""
+    if "--remove" in sys.argv:
+        return sso_remove()
     sys.path.insert(0, str(SERVER / "kit-secrets"))
     import agent
     disc, cid = os.environ.get("KIT_SSO_DISCOVERY_URL", ""), os.environ.get("KIT_SSO_CLIENT_ID", "")
@@ -249,8 +286,7 @@ def sso():
         eg.apply()
         eg.log_change("add", rule, "kit sso")
         print(f"외부 접속 허용: {rule['host']}:{rule['port']} (회사 SSO)")
-    gitea = ["runuser", "-u", "git", "--", "env", "HTTPS_PROXY=http://127.0.0.1:3128", "HTTP_PROXY=http://127.0.0.1:3128",
-             "NO_PROXY=127.0.0.1,localhost", "/opt/kit/bin/gitea", "--work-path", "/data/gitea", "--config", "/data/gitea/custom/conf/app.ini", "admin", "auth"]
+    gitea = GITEA_CLI
     listing = subprocess.run(gitea + ["list"], capture_output=True, text=True).stdout
     row = next((l.split() for l in listing.splitlines()[1:] if len(l.split()) > 1 and l.split()[1] == name), None)
     opts = ["--name", name, "--provider", "openidConnect", "--key", cid, "--secret", sec, "--auto-discover-url", disc,
