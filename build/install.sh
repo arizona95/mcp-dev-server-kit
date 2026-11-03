@@ -1,6 +1,8 @@
 #!/bin/sh
 # MCP Dev Kit 처음 설치 — 이 묶음 폴더에서 이 파일 하나만 실행한다(관리자 · 리눅스 + Docker).
 #   sudo ./install.sh
+#   sudo ./install.sh --recreate   gate.env 를 고친 뒤 적용 — 데이터는 그대로, 지금 버전 그대로 컨테이너만 다시 만든다
+#                                  (지금 돌고 있는 버전의 폴더 /srv/kit/releases/<지금 버전>/ 에서 실행)
 # 하는 일: 해시 확인 → 이미지 불러오기 → /srv/kit(설정·인증서·버전 폴더) 준비 → 컨테이너 시작 → 점검 → 버전표 출력
 # 다음 버전: 새 묶음 폴더를 /srv/kit/releases/ 에 넣고 포털 '버전 관리' 에서 [설치] (데이터는 그대로, 실패하면 자동 롤백)
 set -eu
@@ -25,7 +27,15 @@ if [ ! -f "$KIT/gate.env" ]; then
   exit 0
 fi
 if docker inspect "$CT" >/dev/null 2>&1; then
-  echo "이미 설치돼 있습니다 — 버전 바꾸기는 포털 '버전 관리' 에서 합니다."; docker exec "$CT" kit version; exit 0
+  if [ "${1:-}" != "--recreate" ]; then
+    echo "이미 설치돼 있습니다 — 버전 바꾸기는 포털 '버전 관리' 에서, gate.env 를 고친 뒤 적용은 sudo ./install.sh --recreate"; docker exec "$CT" kit version; exit 0
+  fi
+  RUNNING="$(docker inspect -f '{{.Config.Image}}' "$CT")"
+  if [ "$RUNNING" != "$IMAGE" ]; then
+    echo "지금 도는 것은 $RUNNING 입니다 — 그 버전의 폴더($KIT/releases/mcp-dev-server-kit-v${RUNNING#*:}/)에서 실행하세요 (버전 바꾸기는 포털 '버전 관리')"; exit 2
+  fi
+  echo "   gate.env 적용 — 컨테이너만 다시 만듭니다 (데이터 볼륨 mcp-kit-data 는 그대로)"
+  docker rm -f "$CT" >/dev/null
 fi
 echo "4/5 시작"
 docker run -d --name "$CT" --restart unless-stopped --cap-add NET_ADMIN --env-file "$KIT/gate.env" \
