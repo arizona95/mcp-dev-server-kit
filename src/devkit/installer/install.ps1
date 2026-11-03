@@ -98,5 +98,9 @@ if (-not ($UserPath -split ';' -contains $Dir)) {
 }
 Write-Host "설치 완료: $Dir\mcp-test.cmd"
 Write-Host "처음 한 번, 관리자 PowerShell 에서 샌드박스 준비: node `"$SrtCli`" windows-install --proxy-port-range 60080-60143"
-& $Goose.FullName --version
+# 회사가 AppLocker 로 goose 직접 실행을 막았으면(P3) 여기서 막힌다 — 정상: mcp-test 가 샌드박스 계정으로 실행한다
+try { & $Goose.FullName --version } catch {
+  if ($_.Exception.Message -notmatch 'group policy|그룹 정책') { throw }
+  Write-Host 'goose 직접 실행은 이 PC 정책(AppLocker)으로 막혀 있습니다 — mcp-test 로만(샌드박스 안에서) 실행됩니다.'
+}
 }

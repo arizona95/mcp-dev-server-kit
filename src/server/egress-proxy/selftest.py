@@ -19,10 +19,14 @@ def via_proxy(host, port=443, timeout=10):
         status = s.recv(4096).split(b"\r\n", 1)[0].decode(errors="replace")
         if " 200" not in status:
             return False, f"프록시 응답: {status}"
-        ctx = ssl.create_default_context()
-        with ctx.wrap_socket(s, server_hostname=host) as t:
-            t.sendall(f"HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
-            first = t.recv(4096).split(b"\r\n", 1)[0].decode(errors="replace")
+        # 통제 판정은 프록시가 터널을 열어 줬는가(200)까지 — 상대가 TLS 가 아니면(예: http 로 둔 사내 IdP) 그 사실만 적는다
+        try:
+            ctx = ssl.create_default_context()
+            with ctx.wrap_socket(s, server_hostname=host) as t:
+                t.sendall(f"HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+                first = t.recv(4096).split(b"\r\n", 1)[0].decode(errors="replace")
+        except (ssl.SSLError, OSError) as e:
+            first = f"TLS 연결 안 됨({type(e).__name__}) — 프록시는 열어 줌"
         return True, f"프록시 응답: {status} → 상대 서버 응답: {first}"
 
 
