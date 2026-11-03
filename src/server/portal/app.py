@@ -863,9 +863,13 @@ if __name__ == "__main__":
 ## 시험 (내 PC)
 
 ```
-pip install -e .
+py -m venv .venv
+.venv\\Scripts\\python -m pip install -e .
 mcp-test --with-extension "{entry}"
 ```
+
+(리눅스: `python3 -m venv .venv` · `.venv/bin/python -m pip install -e .`)
+MCP 는 이 폴더의 가상환경(.venv)에 설치합니다 — 샌드박스는 작업 폴더만 읽을 수 있어, 사용자 폴더에 깔린 명령은 찾지 못합니다.
 
 실행할 때마다 브라우저로 사내 로그인을 확인하고, 툴을 부를 때마다 승인을 묻습니다.
 키(토큰)는 코드에 넣지 말고 kit-mcp.json 의 "secrets" 에 이름만 적은 뒤 사내 Git 비밀값에 넣습니다.

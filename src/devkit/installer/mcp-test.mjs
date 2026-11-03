@@ -78,6 +78,8 @@ if (policy.hitl_required) gooseMode = mode === "session" ? "approve" : "chat";
 
 // ③ MCP 비밀값(P21)
 const work = process.cwd();
+// MCP 는 작업 폴더의 가상환경(.venv)에 설치한다 — 샌드박스가 읽을 수 있는 곳(사용자 폴더에 깔린 pip 명령은 샌드박스 계정이 못 읽음)
+const venvBin = join(work, ".venv", WIN ? "Scripts" : "bin");
 // "secrets": ["SLACK_TOKEN", {"env": "GITHUB_TOKEN", "name": "GH_TOKEN"}] — env = MCP 가 받는 환경 변수, name = 저장소에 넣은 이름
 // (사내 Git 은 GITHUB_·GITEA_ 로 시작하는 비밀값 이름을 막는다 — 그럴 때 다른 이름으로 넣고 env 로 이어 준다)
 const okName = n => typeof n === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(n);
@@ -111,6 +113,7 @@ const missing = wanted.filter(n => !(n in secrets));
 const env = {...process.env, GOOSE_PROVIDER: "openai", GOOSE_MODEL: "kit-llm", OPENAI_HOST: `${kit.public}/llm`,
   GOOSE_TELEMETRY_OFF: "1", GOOSE_DISABLE_KEYRING: "1", GOOSE_MODE: gooseMode};
 delete env.OPENAI_API_KEY;
+if (!WIN && existsSync(venvBin)) env.PATH = `${venvBin}:${env.PATH || ""}`;
 if (kit.ca_bundle && existsSync(kit.ca_bundle)) env.SSL_CERT_FILE = kit.ca_bundle;
 // goose 설정은 실행마다 빈 폴더 — '항상 허용'·세션 기록이 다음 실행으로 넘어가지 않는다
 const runRoot = WIN ? "" : mkdtempSync(join(tmpdir(), "kit-goose-"));
@@ -138,7 +141,9 @@ if (policy.sandbox !== "required") {
   const settings = {
     network: {allowedDomains: [...policy.network_allowed, ...kitAddrs], deniedDomains: []},
     filesystem: {
-      denyRead: policy.workspace_only ? [HOME] : [],
+      // 윈도우는 샌드박스가 별도 계정(srt-sandbox)으로 돌아 다른 사람의 홈은 OS 권한(주인·SYSTEM·관리자만)으로 이미 못 읽는다.
+      // 홈에 거부 규칙을 걸면 srt 가 상위 C:\Users 권한까지 바꾸려 해 표준 사용자에선 샌드박스가 아예 안 뜬다(관리자만 됨)
+      denyRead: policy.workspace_only && !WIN ? [HOME] : [],
       allowRead: [work, kit.dir, CONF, ...(runRoot ? [runRoot] : [])],
       allowWrite: [work, tmpdir()],
       denyWrite: [join(CONF, "kit.json")],
@@ -197,7 +202,7 @@ if (policy.sandbox !== "required") {
         return `set /p ${k}=<"${path}"&& `;
       }).join("");
       // 샌드박스 사용자도 PC 공통 NO_PROXY 를 물려받는다 — 비운다 · 파이썬 보정(pyshim): 루프백 socketpair 를 허용 범위 안에서
-      const line = `chcp 65001>nul&& set "NO_PROXY="&& set "no_proxy="&& set "PYTHONPATH=${join(kit.dir, "pyshim")}"&& set "KIT_LOOPBACK_RANGE=${WIN_PORTS.join("-")}"&& `
+      const line = `chcp 65001>nul&& set "NO_PROXY="&& set "no_proxy="&& ${existsSync(venvBin) ? `set "PATH=${venvBin};%PATH%"&& ` : ""}set "PYTHONPATH=${join(kit.dir, "pyshim")}"&& set "KIT_LOOPBACK_RANGE=${WIN_PORTS.join("-")}"&& `
         + `(if not exist "${root}" mkdir "${root}")&& set "GOOSE_PATH_ROOT=${root}"&& set "GOOSE_MODE=auto"&& ${gooseEnv}${pipeSet}`
         + [kit.goose, ...wrap(gArgs)].map(winQuote).join(" ");
       spawn(process.execPath, [kit.srt_cli, "--settings", file, "-c", line], {stdio: ["ignore", "inherit", "inherit"], env})

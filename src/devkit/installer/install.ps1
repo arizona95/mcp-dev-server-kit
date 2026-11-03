@@ -45,6 +45,7 @@ Write-Host '샌드박스(srt) 받는 중...'
 $Tgz = Get-KitFile 'srt-bundle.tgz' $SrtSha256
 if (Test-Path (Join-Path $Dir 'srt-bundle')) { Remove-Item -Recurse -Force (Join-Path $Dir 'srt-bundle') }
 tar -xzf $Tgz -C $Dir
+if ($LASTEXITCODE -ne 0) { throw 'srt 묶음을 풀지 못했습니다' }
 Remove-Item $Tgz
 Get-KitFile 'mcp-test.mjs' $MjsSha256 | Out-Null
 # 사람 승인 관문 — 샌드박스 안에서 MCP 앞에 서서 툴 호출마다 mcp-test 에 묻는다
@@ -84,7 +85,9 @@ Set-Content -Path (Join-Path $Dir 'mcp-test.cmd') -Value $Cmd -Encoding OEM
 
 # git 커밋 이름·이메일 = 사내 계정 그대로(비어 있을 때만) — 누가 올렸는지 신원이 맞게(P18)
 if ((Get-Command git -ErrorAction SilentlyContinue) -and -not (git config --global user.email)) {
-  $me = Invoke-RestMethod -UseBasicParsing -Headers @{ Authorization = "Bearer $env:KIT_TOKEN" } -Uri "$Public/api/devkit/identity"
+  # PowerShell 5.1 의 Invoke-RestMethod 는 charset 없는 JSON 을 Latin-1 로 읽어 한글 이름이 깨진다 — 바이트를 받아 UTF-8 로 푼다
+  $raw = (Invoke-WebRequest -UseBasicParsing -Headers @{ Authorization = "Bearer $env:KIT_TOKEN" } -Uri "$Public/api/devkit/identity").RawContentStream.ToArray()
+  $me = [Text.Encoding]::UTF8.GetString($raw) | ConvertFrom-Json
   git config --global user.name $me.name; git config --global user.email $me.email
 }
 

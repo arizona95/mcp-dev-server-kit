@@ -84,7 +84,7 @@ async function load() {
   const repos = await api("/api/repos");
   $("repo").innerHTML = repos.map(r => `<option value="${esc(r.full_name)}" data-branch="${esc(r.default_branch)}">${esc(r.full_name)}</option>`).join("")
     || '<option value="">Git 에 저장소가 없습니다</option>';
-  $("repo").onchange = () => { const o = $("repo").selectedOptions[0]; if (o) document.querySelector("[name=ref]").value = o.dataset.branch; };
+  $("repo").onchange = () => { const o = $("repo").selectedOptions[0]; if (o) document.querySelector("[name=ref]").value = o.dataset.branch || ""; };
   $("repo").onchange();
   $("up-repo").innerHTML = $("repo").innerHTML;
   load();

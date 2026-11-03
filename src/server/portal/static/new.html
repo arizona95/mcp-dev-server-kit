@@ -69,7 +69,7 @@ $("f").onsubmit = async ev => {
       body: JSON.stringify({name: f.get("name"), description: f.get("description")})});
     const name = r.repo.split("/")[1];
     $("clone").textContent = `git clone ${r.clone}\ncd ${name}`;
-    $("try").textContent = `pip install -e .\nmcp-test --with-extension "${name}-mcp"     (대화형 — 툴 호출마다 승인)`;
+    $("try").textContent = `py -m venv .venv\n.venv\\Scripts\\python -m pip install -e .     (MCP 를 작업 폴더의 가상환경에 — 샌드박스가 읽을 수 있는 곳)\nmcp-test --with-extension "${name}-mcp"     (대화형 — 툴 호출마다 승인)`;
     $("next").hidden = false; ev.target.reset(); repos();
   } catch (e) { $("err").textContent = e.message; }
 };
