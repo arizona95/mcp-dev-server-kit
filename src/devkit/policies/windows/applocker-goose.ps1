@@ -19,7 +19,11 @@ if ($Sid -in @('S-1-1-0', 'S-1-5-32-545', 'S-1-5-11', 'S-1-5-4')) { throw "$User
 
 $h = Get-AppLockerFileInformation -Path $Goose.FullName
 $hash = $h.Hash.HashDataString; $len = (Get-Item $Goose.FullName).Length
-$hasExeRules = [bool]((Get-AppLockerPolicy -Effective).RuleCollections | Where-Object { $_.RuleCollectionType -eq 'Exe' -and $_.Count -gt 0 })
+# 방금 바뀐 정책이 '유효 정책'에 늦게 비치면 잘못 판단한다 — 컴퓨터 정책부터 새로 고친다
+gpupdate /target:computer /force | Out-Null
+# 허용 규칙이 하나라도 있으면 회사 정책이 있는 것 — 거부만 합친다. 없으면(규칙 없음·거부만) '모두 허용'을 함께 넣는다
+# (허용 규칙 없이 실행 파일 규칙을 켜면 모든 프로그램이 막힌다)
+$hasExeRules = [bool](([xml](Get-AppLockerPolicy -Effective -Xml)).SelectNodes("//RuleCollection[@Type='Exe']/*[@Action='Allow']").Count)
 $allowAll = if ($hasExeRules) { '' } else { @"
     <FilePathRule Id="$([guid]::NewGuid())" Name="MCP Dev Kit — (규칙이 없던 PC) 모든 사용자 모두 허용" Description="MCP Dev Kit" UserOrGroupSid="S-1-1-0" Action="Allow">
       <Conditions><FilePathCondition Path="*" /></Conditions></FilePathRule>
@@ -37,7 +41,7 @@ $out = Join-Path $env:TEMP 'mcp-dev-kit-applocker.xml'
 [IO.File]::WriteAllText($out, $xml, [Text.Encoding]::Unicode)
 Write-Host "정책 XML: $out  (이 PC 에 실행 파일 규칙 $(if ($hasExeRules) { '있음 — 거부 규칙만 합침' } else { '없음 — 모두 허용 + 거부' }))"
 
-# 시험: 같은 정책에서 개발자 · 샌드박스 계정이 goose.exe 를 실행할 수 있나
+# 시험: 합친 결과에서 개발자는 goose 만 막히고(cmd·node 는 그대로), 샌드박스 계정은 goose 를 돌릴 수 있어야 한다 — 아니면 적용하지 않는다
 $test = if ($hasExeRules) { Join-Path $env:TEMP 'mcp-dev-kit-applocker-merged.xml' } else { $out }
 if ($hasExeRules) {   # 회사 정책 + 거부 규칙을 합친 결과로 시험
   $merged = [xml](Get-AppLockerPolicy -Effective -Xml)
@@ -46,13 +50,30 @@ if ($hasExeRules) {   # 회사 정책 + 거부 규칙을 합친 결과로 시험
   $exe.AppendChild($merged.ImportNode($mine.AppLockerPolicy.RuleCollection.FileHashRule, $true)) | Out-Null
   $merged.Save($test)
 }
+$others = @((Join-Path $env:SystemRoot 'System32\cmd.exe')) + @((Get-Command node -ErrorAction SilentlyContinue).Source | Where-Object { $_ })
+$expect = @{}
+$expect["$User|$($Goose.FullName)".ToLower()] = 'Denied'; $expect["srt-sandbox|$($Goose.FullName)".ToLower()] = 'Allowed'
+foreach ($o in $others) { $expect["$User|$o".ToLower()] = 'Allowed' }
+$ok = $true
 foreach ($who in @($User, 'srt-sandbox')) {
-  Test-AppLockerPolicy -XmlPolicy $test -Path $Goose.FullName -User $who |
-    ForEach-Object { Write-Host ("{0,-14} {1,-14} {2}" -f $who, $_.PolicyDecision, (Split-Path -Leaf $_.FilePath)) }
+  $paths = if ($who -eq $User) { @($Goose.FullName) + $others } else { @($Goose.FullName) }
+  Test-AppLockerPolicy -XmlPolicy $test -Path $paths -User $who | ForEach-Object {
+    $want = $expect["$who|$($_.FilePath)".ToLower()]; $good = $_.PolicyDecision.ToString() -like "$want*"
+    if (-not $good) { $ok = $false }
+    Write-Host ("{0,-14} {1,-22} {2,-12} {3}" -f $who, $_.PolicyDecision, (Split-Path -Leaf $_.FilePath), $(if ($good) { '기대대로' } else { "기대 $want — 다름" }))
+  }
 }
+if (-not $ok) { throw '시험 결과가 기대와 다릅니다 — 적용하지 않았습니다(회사 AppLocker 정책과 함께 검토하세요)' }
 if ($Apply) {
-  Set-AppLockerPolicy -XmlPolicy $out -Merge
-  # AppIDSvc 시작 유형은 윈도우가 보호해 바꿀 수 없다(접근 거부) — 정책이 있으면 윈도우가 알아서 띄운다. 지금 바로 켜기만 한다
-  Start-Service AppIDSvc
-  Write-Host "적용했습니다 (AppIDSvc 시작). $User 는 goose.exe 를 직접 실행할 수 없고, mcp-test(샌드박스)로만 실행됩니다."
+  $before = Join-Path $env:TEMP 'mcp-dev-kit-applocker-before.xml'
+  Get-AppLockerPolicy -Local -Xml | Set-Content -Encoding Unicode $before
+  try {
+    Set-AppLockerPolicy -XmlPolicy $out -Merge
+    # AppIDSvc 시작 유형은 윈도우가 보호해 바꿀 수 없다(접근 거부) — 정책이 있으면 윈도우가 알아서 띄운다. 지금 바로 켜기만 한다
+    Start-Service AppIDSvc
+  } catch {
+    Set-AppLockerPolicy -XmlPolicy $before
+    throw "적용 중 실패해 이전 정책으로 되돌렸습니다: $_"
+  }
+  Write-Host "적용했습니다 (AppIDSvc 시작). $User 는 goose.exe 를 직접 실행할 수 없고, mcp-test(샌드박스)로만 실행됩니다. 이전 정책: $before"
 }
