@@ -188,10 +188,26 @@ def simple_index(package=None):
 MARKET_OWNER = os.environ.get("KIT_ADMIN_USER", "kitadmin")
 MARKET_REPO = "mcp-marketplace"
 MARKET_NAME = os.environ.get("KIT_MARKETPLACE_NAME", "sds-mcp")
+# 임직원 사용자 PC 가 받는 주소 = 포털이 내주는 읽기 전용 사본(git dumb HTTP). 사내 Git 은 로그인해야 보이므로(REQUIRE_SIGNIN_VIEW)
+# Gitea 계정이 없는 사용자도 받을 수 있게 한다. 들어 있는 것은 플러그인 설정뿐(승인 저장소 /approved/simple 처럼 공개 읽기).
+MARKET_MIRROR = REG / "marketplace.git"
 
 
 def marketplace_url():
+    return f"{os.environ['KIT_PUBLIC_URL'].rstrip('/')}/market/{MARKET_NAME}.git"
+
+
+def gitea_marketplace_url():
     return f"{os.environ['KIT_PUBLIC_URL'].rstrip('/')}/git/{MARKET_OWNER}/{MARKET_REPO}.git"
+
+
+def _mirror(run):
+    """작업 사본의 main 을 읽기 전용 사본으로 — 바뀐 것이 없어도(사본이 처음이거나 지워졌을 때) 맞춘다."""
+    import subprocess
+    if not (MARKET_MIRROR / "HEAD").exists():
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(MARKET_MIRROR)], capture_output=True, timeout=30)
+    run("push", "-q", "-f", str(MARKET_MIRROR), "main:main")
+    subprocess.run(["git", "-C", str(MARKET_MIRROR), "update-server-info"], capture_output=True, timeout=30)
 
 
 def marketplace_files(registry):
@@ -257,9 +273,11 @@ def sync_marketplace(registry, who="kit"):
         run("checkout", "-q", "-B", "main")
         run("add", "-A")
         if not run("status", "--porcelain").stdout.strip():
+            _mirror(run)
             return {"changed": False, "url": marketplace_url()}
         run("-c", "user.name=MCP Dev Kit", "-c", "user.email=kit@kit.local", "commit", "-q", "-m", f"레지스트리 반영 ({who})")
         p = run("push", "-q", "origin", "main")
         if p.returncode != 0:
             return {"changed": False, "error": p.stderr[-300:].replace(pw, "***"), "url": marketplace_url()}
+        _mirror(run)
         return {"changed": True, "commit": run("rev-parse", "--short", "HEAD").stdout.strip(), "url": marketplace_url()}

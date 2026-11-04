@@ -150,12 +150,13 @@ def register(app, h):
     def marketplace_syncs():
         """임직원 PC(IP)마다 마켓플레이스 저장소를 마지막으로 당긴 시각 — nginx 접속 기록에서(P11 PC별 제거 확인)."""
         import datetime
-        path = f"/git/{h.publisher.MARKET_OWNER}/{h.publisher.MARKET_REPO}.git/"
+        gitea = f"/git/{h.publisher.MARKET_OWNER}/{h.publisher.MARKET_REPO}.git/"
+        mirror = f"/market/{h.publisher.MARKET_NAME}.git/info/refs"   # 읽기 전용 사본(dumb HTTP) — clone·fetch 마다 info/refs 를 먼저 받는다
         last = {}
         try:
             with open(DATA / "logs" / "nginx-access.log", errors="replace") as f:
                 for line in f:
-                    if path not in line or "git-upload-pack" not in line:
+                    if not ((gitea in line and "git-upload-pack" in line) or mirror in line):
                         continue
                     m = re.match(r"(\S+) \S+ \S+ \[([^\]]+)\]", line)
                     if m:

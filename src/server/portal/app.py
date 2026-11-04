@@ -709,6 +709,17 @@ def registry_file(fname: str, _=Depends(admin)):
     return FileResponse(DATA / "registry" / fname, filename=fname)
 
 
+@app.get("/market/{market}.git/{path:path}")
+def market_file(market: str, path: str):
+    """플러그인 마켓플레이스 읽기 전용 사본(git dumb HTTP) — 로그인 없이 clone·fetch 만. 쓰기(push)는 없다."""
+    root = publisher.MARKET_MIRROR.resolve()
+    p = (root / path).resolve()
+    if market != publisher.MARKET_NAME or not re.fullmatch(r"[A-Za-z0-9._/-]+", path) or ".." in path \
+            or not str(p).startswith(str(root) + "/") or not p.is_file():
+        raise HTTPException(404)
+    return FileResponse(p, media_type="application/octet-stream")
+
+
 @app.get("/approved/simple/")
 def approved_index():
     from fastapi.responses import HTMLResponse
