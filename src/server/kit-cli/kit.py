@@ -5,6 +5,7 @@
   kit mail-template   임직원 안내 메일 문안
   kit access-reset    접근제어를 '모두 허용'으로 되돌림 (IP 목록 실수로 잠겼을 때 — 서버에서 실행)
   kit sso             회사 SSO 붙이기(gate.env KIT_SSO_* + 키 저장소 KIT_SSO_CLIENT_SECRET) · kit sso --remove = 떼기
+  kit market-github <소유자/저장소>   승인 MCP 를 GitHub 마켓플레이스 저장소에도 올림(배포 키 만들기) · --remove = 그만 올림
 """
 import json
 import os
@@ -175,11 +176,11 @@ def key_store():
     return src + " · 마스터 키는 메모리(/dev/shm)에만"
 
 
-def put_secret(name):
-    """표준 입력의 값을 키 저장소(키트 관리자 계정의 Gitea 시크릿 <name>)에 넣는다 — 화면·로그에 값을 찍지 않는다."""
+def put_secret(name, key=None):
+    """표준 입력의 값(또는 key)을 키 저장소(키트 관리자 계정의 Gitea 시크릿 <name>)에 넣는다 — 화면·로그에 값을 찍지 않는다."""
     import base64
     import urllib.request
-    key = sys.stdin.readline().strip()
+    key = key or sys.stdin.readline().strip()
     if not key:
         sys.exit(f"표준 입력으로 값을 넣어 주세요 (예: docker exec -i <컨테이너> kit secret {name} < 값파일)")
     user, pw = os.environ.get("KIT_ADMIN_USER", "kitadmin"), os.environ["PORTAL_ADMIN_PASSWORD"]
@@ -309,6 +310,55 @@ def sso():
     print(("SSO 를 고쳤습니다: " if row else "SSO 를 붙였습니다: ") + name if p.returncode == 0 else "실패: " + (p.stderr or p.stdout)[-400:].replace(sec, "***"))
 
 
+MARKET_RULE_REASON = "GitHub 마켓플레이스 push — kit market-github"
+
+
+def market_github():
+    """GitHub 마켓플레이스: 그 저장소 하나에만 쓰는 배포 키(ed25519)를 만들어 개인 키는 키 저장소에, 공개 키는 화면에.
+    관리자가 GitHub 저장소 Settings → Deploy keys 에 공개 키를 'Allow write access' 로 넣으면, 승인·되돌리기 때마다 그 저장소도 맞춘다."""
+    import base64
+    import re
+    sys.path.insert(0, str(SERVER / "egress-proxy"))
+    import egress as eg
+    conf = DATA / "publisher" / "github.json"
+    rule = {"host": "ssh.github.com", "port": 443, "reason": MARKET_RULE_REASON}
+    if "--remove" in sys.argv:
+        conf.unlink(missing_ok=True)
+        keep = [r for r in eg.load_extra() if r.get("reason") != MARKET_RULE_REASON]
+        if len(keep) != len(eg.load_extra()):
+            Path(eg.EXTRA).write_text(json.dumps(keep, ensure_ascii=False, indent=1))
+            eg.apply()
+            eg.log_change("remove", rule, "kit market-github --remove")
+        print("GitHub 마켓플레이스에 더 올리지 않습니다. GitHub 저장소의 배포 키도 지워 주세요(Settings → Deploy keys).")
+        return
+    repo = sys.argv[2] if len(sys.argv) > 2 else ""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        sys.exit("kit market-github <소유자/저장소>   예) kit market-github my-corp/mcp-marketplace")
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    k = Ed25519PrivateKey.generate()
+    priv = k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, serialization.NoEncryption())
+    pub = k.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode() + " mcp-dev-kit"
+    put_secret("KIT_MARKET_GITHUB_KEY", base64.b64encode(priv).decode())
+    conf.parent.mkdir(parents=True, exist_ok=True)
+    conf.write_text(json.dumps({"repo": repo, "at": time.time()}) + "\n")
+    conf.chmod(0o644)
+    if not any(x["host"] == rule["host"] and x["port"] == rule["port"] for x in eg.all_rules()):
+        Path(eg.EXTRA).write_text(json.dumps(eg.load_extra() + [rule], ensure_ascii=False, indent=1))
+        eg.apply()
+        eg.log_change("add", rule, "kit market-github")
+        print("외부 접속 허용: ssh.github.com:443 (GitHub 마켓플레이스 push)")
+    print(f"""
+GitHub 저장소 https://github.com/{repo} → Settings → Deploy keys → Add deploy key
+  Title: mcp-dev-kit
+  Key  : {pub}
+  [v] Allow write access   → Add key
+
+넣은 뒤 포털 '레지스트리' 의 [마켓플레이스 다시 맞추기] 를 누르거나, 다음 승인·되돌리기 때 자동으로 올라갑니다.
+임직원 PC 관리형 설정(managed-settings.json) 예:
+  {{"extraKnownMarketplaces": {{"sds-mcp": {{"source": {{"source": "github", "repo": "{repo}"}}, "autoUpdate": true}}}}}}""")
+
+
 def verify():
     if "--quick" in sys.argv:   # 업데이트 사전·사후 점검 — 오래 걸리는 샘플 검사·osv 는 뺀다
         results = [check("서비스", services), check("키 저장소 (디스크에 평문 키 없음)", key_store), check("외부 접속 통제", egress),
@@ -335,6 +385,8 @@ def main():
         llm_key()
     elif cmd == "sso":
         sso()
+    elif cmd == "market-github":
+        market_github()
     elif cmd == "secret" and len(sys.argv) > 2 and sys.argv[2] in ("KIT_SIEM_TOKEN", "KIT_SSO_CLIENT_SECRET"):
         put_secret(sys.argv[2])
     elif cmd == "mail-template":

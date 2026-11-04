@@ -666,7 +666,24 @@ def registry(_=Depends(admin)):
     except ValueError:
         market = {}
     return {"registry": publisher.load(), "managed_mcp": read("managed-mcp.json"), "signature": read("managed-mcp.json.sig"),
-            "public_key": publisher.public_key_pem(), "marketplace": {**market, "url": publisher.marketplace_url(), "name": publisher.MARKET_NAME}}
+            "public_key": publisher.public_key_pem(), "marketplace": {**market, "url": publisher.marketplace_url(), "name": publisher.MARKET_NAME,
+                                                                       "github_repo": publisher.github_repo(), "github_url": publisher.github_url()}}
+
+
+@app.post("/api/registry/sync")
+def registry_sync(who=Depends(admin)):
+    """배포 자원을 다시 만들고 마켓플레이스 저장소(사내 Git·GitHub)를 레지스트리와 다시 맞춘다."""
+    publisher.rebuild_resources(publisher.load())
+    event("registry_sync", who)
+    return json.loads((DATA / "registry" / "marketplace.json").read_text())
+
+
+@app.get("/admin/registry/{name}/resources/{fname}")
+def registry_resource(name: str, fname: str, _=Depends(admin)):
+    e = publisher.load().get(name)
+    if not e or e.get("status") != "approved" or fname not in {r["file"] for r in (e.get("resources") or {}).values()}:
+        raise HTTPException(404)
+    return FileResponse(publisher.RESOURCES / name / fname, filename=fname)
 
 
 class Revoke(BaseModel):
