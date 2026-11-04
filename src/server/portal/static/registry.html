@@ -40,7 +40,6 @@ pre { margin: 0; padding: 14px 16px; border-radius: 10px; background: #0f1720; c
       <p><button class="btn line sm" id="sync">다시 맞추기</button></p></div>
     <table><tbody>
       <tr><td>사내 Git</td><td class="mono" id="mk-url"></td><td class="dim" id="mk-state"></td></tr>
-      <tr><td>GitHub</td><td class="mono" id="gh-url"></td><td class="dim" id="gh-state"></td></tr>
     </tbody></table>
     <pre id="mk"></pre>
     <p class="dim">Claude Desktop 커넥터: 위 목록의 [Claude Desktop (.mcpb)] 를 받아 claude.ai 조직 설정 → Connectors → Add → Custom → Desktop 으로 올립니다.</p>
@@ -81,12 +80,10 @@ async function load() {
   const at = m.at ? new Date(m.at * 1000).toLocaleString("ko-KR", {hour12: false}) + " · " : "";
   $("mk-url").textContent = m.url;
   $("mk-state").textContent = at + syncState(m);
-  $("gh-url").textContent = m.github_url || "-";
-  $("gh-state").textContent = m.github_repo ? at + syncState(m.github || {}) : "안 씀 — 서버에서 kit market-github <소유자/저장소>";
-  const src = m.github_repo ? {source: "github", repo: m.github_repo} : {source: "git", url: m.url};
+  const src = {source: "git", url: m.url};
   $("mk").textContent = `# 임직원 PC 관리형 설정(managed-settings.json)으로 전원에게 + 자동 업데이트\n` +
     JSON.stringify({extraKnownMarketplaces: {[m.name]: {source: src, autoUpdate: true}}, strictKnownMarketplaces: [src]}, null, 2) +
-    `\n\n# 손으로 (한 번)\nclaude plugin marketplace add ${m.github_url || m.url}\nclaude plugin install <이름>@${m.name}`;
+    `\n\n# 손으로 (한 번)\nclaude plugin marketplace add ${m.url}\nclaude plugin install <이름>@${m.name}`;
 }
 $("sync").onclick = async () => {
   $("sync").disabled = true;

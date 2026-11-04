@@ -19,7 +19,7 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources \
 
 ENV KIT_VERSION=$KIT_VERSION KIT_SANDBOX_IMAGE=mcp-kit-sandbox-python:$KIT_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      squid nftables python3 python3-venv supervisor ca-certificates git nginx openssh-client \
+      squid nftables python3 python3-venv supervisor ca-certificates git nginx \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -s /usr/sbin/nologin kit \
     && useradd -m -s /bin/sh git && usermod -aG kit git

@@ -666,13 +666,12 @@ def registry(_=Depends(admin)):
     except ValueError:
         market = {}
     return {"registry": publisher.load(), "managed_mcp": read("managed-mcp.json"), "signature": read("managed-mcp.json.sig"),
-            "public_key": publisher.public_key_pem(), "marketplace": {**market, "url": publisher.marketplace_url(), "name": publisher.MARKET_NAME,
-                                                                       "github_repo": publisher.github_repo(), "github_url": publisher.github_url()}}
+            "public_key": publisher.public_key_pem(), "marketplace": {**market, "url": publisher.marketplace_url(), "name": publisher.MARKET_NAME}}
 
 
 @app.post("/api/registry/sync")
 def registry_sync(who=Depends(admin)):
-    """배포 자원을 다시 만들고 마켓플레이스 저장소(사내 Git·GitHub)를 레지스트리와 다시 맞춘다."""
+    """배포 자원을 다시 만들고 마켓플레이스 저장소(사내 Git)를 레지스트리와 다시 맞춘다."""
     publisher.rebuild_resources(publisher.load())
     event("registry_sync", who)
     return json.loads((DATA / "registry" / "marketplace.json").read_text())

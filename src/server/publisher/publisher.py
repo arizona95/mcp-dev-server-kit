@@ -23,7 +23,6 @@ APPROVED = REG / "approved"
 HISTORY = REG / "history.jsonl"
 KEY = DATA / "publisher" / "signing_key.pem"
 RESOURCES = REG / "resources"   # 배포 자원(.mcpb·.zip) — resources.py
-GITHUB_CONF = DATA / "publisher" / "github.json"   # GitHub 마켓플레이스 저장소 — kit market-github
 
 
 def norm(name):
@@ -182,37 +181,20 @@ def simple_index(package=None):
         f'<a href="/approved/files/{d.name}/{f.name}#sha256={hashlib.sha256(f.read_bytes()).hexdigest()}">{f.name}</a>' for f in files) + "\n</body></html>\n"
 
 
-# ── Claude Code 플러그인 마켓플레이스 (사내 Git 저장소 + 쓰면 GitHub 저장소) ─────────────────────
+# ── Claude Code 플러그인 마켓플레이스 (사내 Git 저장소) ─────────────────────
 # 형식: https://code.claude.com/docs/en/plugin-marketplaces · host-marketplace
 # 승인 MCP 하나 = 플러그인 하나(.mcp.json 에 managed-mcp.json 과 같은 uvx 명령). 되돌린 것은 renames: null +
 # forceRemoveDeletedPlugins 로 임직원 PC 에서도 지워진다. 임직원은 marketplace add 한 번 → marketplace update(또는 자동 업데이트).
-# 승인·되돌리기 때마다 두 저장소를 같은 내용으로 맞춘다 — GitHub 쪽에는 플러그인 설정만 올라가고 MCP 코드·휠은 사내 승인 저장소에 남는다.
 MARKET_OWNER = os.environ.get("KIT_ADMIN_USER", "kitadmin")
 MARKET_REPO = "mcp-marketplace"
 MARKET_NAME = os.environ.get("KIT_MARKETPLACE_NAME", "sds-mcp")
-# GitHub 의 SSH 호스트 키(https://api.github.com/meta ssh_keys) — 다른 서버로 밀어 넣지 않게 고정
-GITHUB_HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
-GITHUB_KEY_SECRET = "KIT_MARKET_GITHUB_KEY"
 
 
 def marketplace_url():
     return f"{os.environ['KIT_PUBLIC_URL'].rstrip('/')}/git/{MARKET_OWNER}/{MARKET_REPO}.git"
 
 
-def github_repo():
-    try:
-        return json.loads(GITHUB_CONF.read_text()).get("repo") or None
-    except (FileNotFoundError, ValueError):
-        return None
-
-
-def github_url():
-    repo = github_repo()
-    return f"https://github.com/{repo}.git" if repo else None
-
-
-def marketplace_files(registry, url=None):
-    url = url or marketplace_url()
+def marketplace_files(registry):
     servers = managed_mcp(registry)["mcpServers"]
     plugins, files, renames = [], {}, {}
     for name, e in sorted(registry.items()):
@@ -233,42 +215,15 @@ def marketplace_files(registry, url=None):
         market["renames"] = renames
     files[".claude-plugin/marketplace.json"] = market
     files["README.md"] = (f"# {MARKET_NAME}\n\n사내 MCP Dev Kit 이 승인·되돌리기 때마다 자동으로 고치는 저장소입니다. 손으로 고치지 마세요.\n\n"
-                          f"```\nclaude plugin marketplace add {url}\nclaude plugin install <이름>@{MARKET_NAME}\n"
+                          f"```\nclaude plugin marketplace add {marketplace_url()}\nclaude plugin install <이름>@{MARKET_NAME}\n"
                           f"claude plugin marketplace update {MARKET_NAME}\n```\n")
     return files
 
 
-def _push(url, files, env, secret, who):
-    """저장소를 files 와 같게 만든다. 바뀐 것이 있을 때만 커밋·push."""
+def sync_marketplace(registry, who="kit"):
+    """마켓플레이스 저장소를 레지스트리와 같게 만든다. 바뀐 것이 있을 때만 커밋. 실패해도 승인 자체는 막지 않고 까닭을 돌려준다."""
     import subprocess
     import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        wt = Path(d) / "m"
-        run = lambda *a: subprocess.run(["git", *a], cwd=wt, capture_output=True, text=True, env=env, timeout=90)
-        if subprocess.run(["git", "clone", "-q", url, str(wt)], capture_output=True, env=env, timeout=90).returncode != 0:
-            wt.mkdir()
-            run("init", "-q", "-b", "main")
-            run("remote", "add", "origin", url)
-        for p in wt.iterdir():
-            if p.name != ".git":
-                shutil.rmtree(p) if p.is_dir() else p.unlink()
-        for rel, content in files.items():
-            f = wt / rel
-            f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, indent=2) + "\n")
-        run("checkout", "-q", "-B", "main")
-        run("add", "-A")
-        if not run("status", "--porcelain").stdout.strip():
-            return {"changed": False}
-        run("-c", "user.name=MCP Dev Kit", "-c", "user.email=kit@kit.local", "commit", "-q", "-m", f"레지스트리 반영 ({who})")
-        p = run("push", "-q", "origin", "main")
-        if p.returncode != 0:
-            return {"changed": False, "error": p.stderr[-300:].replace(secret, "***") if secret else p.stderr[-300:]}
-        return {"changed": True, "commit": run("rev-parse", "--short", "HEAD").stdout.strip()}
-
-
-def sync_marketplace(registry, who="kit"):
-    """마켓플레이스 저장소(사내 Git, 설정했으면 GitHub)를 레지스트리와 같게 만든다. 실패해도 승인 자체는 막지 않고 까닭을 돌려준다."""
     import urllib.parse
     import urllib.request
     pw = os.environ["PORTAL_ADMIN_PASSWORD"]
@@ -285,32 +240,26 @@ def sync_marketplace(registry, who="kit"):
                                                       headers={"Authorization": "Basic " + auth, "Content-Type": "application/json"}), timeout=10)
     url = f"http://{MARKET_OWNER}:{urllib.parse.quote(pw, safe='')}@127.0.0.1:3000/{MARKET_OWNER}/{MARKET_REPO}.git"
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
-    result = {**_push(url, marketplace_files(registry), env, pw, who), "url": marketplace_url()}
-    if github_repo():
-        try:
-            result["github"] = {**sync_github(registry, who), "url": github_url()}
-        except Exception as e:
-            result["github"] = {"changed": False, "error": f"{type(e).__name__}: {e}", "url": github_url()}
-    return result
-
-
-def sync_github(registry, who="kit"):
-    """GitHub 마켓플레이스 저장소에 push — 그 저장소에만 쓰기 권한이 있는 배포 키(SSH)로, 사내 egress 프록시를 지나 ssh.github.com:443."""
-    import sys
-    import tempfile
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "kit-secrets"))
-    import agent as secrets_agent
-    r = secrets_agent.request({"cmd": "kit", "names": [GITHUB_KEY_SECRET]})
-    key = (r.get("values") or {}).get(GITHUB_KEY_SECRET)
-    if not key:
-        return {"changed": False, "error": f"배포 키가 키 저장소에 없습니다 — kit market-github {github_repo()} 를 먼저 실행하세요"}
-    with tempfile.TemporaryDirectory() as d:   # 키는 이 push 동안만 임시 폴더(0700)에
-        kf, kh = Path(d) / "id", Path(d) / "known_hosts"
-        kf.write_bytes(base64.b64decode(key))
-        kf.chmod(0o600)
-        kh.write_text(f"[ssh.github.com]:443 {GITHUB_HOST_KEY}\n")
-        connect = Path(__file__).resolve().parent / "ghconnect.py"
-        ssh = (f"ssh -i {kf} -o IdentitiesOnly=yes -o UserKnownHostsFile={kh} -o StrictHostKeyChecking=yes -o BatchMode=yes "
-               f"-o ProxyCommand='{sys.executable} {connect} %h %p' -p 443")
-        env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND=ssh)
-        return _push(f"git@ssh.github.com:{github_repo()}.git", marketplace_files(registry, github_url()), env, None, who)
+    with tempfile.TemporaryDirectory() as d:
+        wt = Path(d) / "m"
+        run = lambda *a: subprocess.run(["git", *a], cwd=wt, capture_output=True, text=True, env=env, timeout=60)
+        if subprocess.run(["git", "clone", "-q", url, str(wt)], capture_output=True, env=env, timeout=60).returncode != 0:
+            wt.mkdir()
+            run("init", "-q", "-b", "main")
+            run("remote", "add", "origin", url)
+        for p in wt.iterdir():
+            if p.name != ".git":
+                shutil.rmtree(p) if p.is_dir() else p.unlink()
+        for rel, content in marketplace_files(registry).items():
+            f = wt / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, indent=2) + "\n")
+        run("checkout", "-q", "-B", "main")
+        run("add", "-A")
+        if not run("status", "--porcelain").stdout.strip():
+            return {"changed": False, "url": marketplace_url()}
+        run("-c", "user.name=MCP Dev Kit", "-c", "user.email=kit@kit.local", "commit", "-q", "-m", f"레지스트리 반영 ({who})")
+        p = run("push", "-q", "origin", "main")
+        if p.returncode != 0:
+            return {"changed": False, "error": p.stderr[-300:].replace(pw, "***"), "url": marketplace_url()}
+        return {"changed": True, "commit": run("rev-parse", "--short", "HEAD").stdout.strip(), "url": marketplace_url()}
