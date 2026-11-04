@@ -709,15 +709,49 @@ def registry_file(fname: str, _=Depends(admin)):
     return FileResponse(DATA / "registry" / fname, filename=fname)
 
 
-@app.get("/market/{market}.git/{path:path}")
-def market_file(market: str, path: str):
-    """플러그인 마켓플레이스 읽기 전용 사본(git dumb HTTP) — 로그인 없이 clone·fetch 만. 쓰기(push)는 없다."""
-    root = publisher.MARKET_MIRROR.resolve()
-    p = (root / path).resolve()
-    if market != publisher.MARKET_NAME or not re.fullmatch(r"[A-Za-z0-9._/-]+", path) or ".." in path \
-            or not str(p).startswith(str(root) + "/") or not p.is_file():
+# 플러그인 마켓플레이스 읽기 전용 사본 — git 스마트 HTTP 중 받기(upload-pack)만. 로그인 없이 clone·fetch(얕은 복제 포함), push 는 없다.
+def _market_repo(market):
+    if market != publisher.MARKET_NAME or not (publisher.MARKET_MIRROR / "HEAD").exists():
         raise HTTPException(404)
-    return FileResponse(p, media_type="application/octet-stream")
+    return str(publisher.MARKET_MIRROR)
+
+
+def _git_env(request):
+    env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", HOME="/nonexistent")
+    if request.headers.get("git-protocol"):
+        env["GIT_PROTOCOL"] = request.headers["git-protocol"]
+    return env
+
+
+def _pkt(line):
+    return f"{len(line) + 4:04x}{line}".encode()
+
+
+@app.get("/market/{market}.git/info/refs")
+def market_refs(market: str, request: Request, service: str = ""):
+    import subprocess
+    from fastapi.responses import Response
+    repo = _market_repo(market)
+    if service != "git-upload-pack":
+        raise HTTPException(403, "읽기 전용입니다")
+    out = subprocess.run(["git", "upload-pack", "--stateless-rpc", "--advertise-refs", repo],
+                         capture_output=True, env=_git_env(request), timeout=30).stdout
+    body = out if request.headers.get("git-protocol", "").startswith("version=2") else _pkt("# service=git-upload-pack\n") + b"0000" + out
+    return Response(body, media_type="application/x-git-upload-pack-advertisement", headers={"Cache-Control": "no-cache"})
+
+
+@app.post("/market/{market}.git/git-upload-pack")
+async def market_upload_pack(market: str, request: Request):
+    import gzip
+    import subprocess
+    from fastapi.responses import Response
+    repo = _market_repo(market)
+    data = await request.body()
+    if request.headers.get("content-encoding") == "gzip":
+        data = gzip.decompress(data)
+    out = subprocess.run(["git", "upload-pack", "--stateless-rpc", repo], input=data, capture_output=True,
+                         env=_git_env(request), timeout=60).stdout
+    return Response(out, media_type="application/x-git-upload-pack-result", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/approved/simple/")

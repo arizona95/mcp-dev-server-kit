@@ -188,7 +188,7 @@ def simple_index(package=None):
 MARKET_OWNER = os.environ.get("KIT_ADMIN_USER", "kitadmin")
 MARKET_REPO = "mcp-marketplace"
 MARKET_NAME = os.environ.get("KIT_MARKETPLACE_NAME", "sds-mcp")
-# 임직원 사용자 PC 가 받는 주소 = 포털이 내주는 읽기 전용 사본(git dumb HTTP). 사내 Git 은 로그인해야 보이므로(REQUIRE_SIGNIN_VIEW)
+# 임직원 사용자 PC 가 받는 주소 = 포털이 내주는 읽기 전용 사본(git 스마트 HTTP 의 upload-pack 만). 사내 Git 은 로그인해야 보이므로(REQUIRE_SIGNIN_VIEW)
 # Gitea 계정이 없는 사용자도 받을 수 있게 한다. 들어 있는 것은 플러그인 설정뿐(승인 저장소 /approved/simple 처럼 공개 읽기).
 MARKET_MIRROR = REG / "marketplace.git"
 
@@ -207,7 +207,6 @@ def _mirror(run):
     if not (MARKET_MIRROR / "HEAD").exists():
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(MARKET_MIRROR)], capture_output=True, timeout=30)
     run("push", "-q", "-f", str(MARKET_MIRROR), "main:main")
-    subprocess.run(["git", "-C", str(MARKET_MIRROR), "update-server-info"], capture_output=True, timeout=30)
 
 
 def marketplace_files(registry):
